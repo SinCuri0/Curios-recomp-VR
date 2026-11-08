@@ -153,6 +153,12 @@ commands and `--sem-perguntar` to skip the questions:
 ./jogar/jogar-ocarina.sh
 ```
 
+On a laptop with an Intel or AMD iGPU next to an NVIDIA GPU, start it with PRIME offload:
+`prime-run ./jogar/jogar-ocarina.sh` (CachyOS: `prime-run game-performance ./jogar/jogar-ocarina.sh`, or
+`prime-run game-performance %command%` as the launch options of a Steam shortcut to the script). If the script prints
+"Driver/library version mismatch", the NVIDIA driver was updated without a restart and Vulkan only sees the iGPU until
+you restart.
+
 Requirements:
 
 - Linux 6.7 or later: the write watch uses userfaultfd write protection with `PAGEMAP_SCAN`. SteamOS 3.8 qualifies.

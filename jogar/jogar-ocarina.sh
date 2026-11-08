@@ -3,6 +3,10 @@
 #
 # From a terminal it shows the output; when started from a desktop shortcut it writes ultima-partida.log and
 # ultima-partida-erros.log next to the project, like the Windows launcher.
+#
+# On a laptop with two GPUs (Intel/AMD + NVIDIA), run it on the NVIDIA one with PRIME offload, for example
+#   prime-run game-performance ./jogar/jogar-ocarina.sh
+# or, as a Steam shortcut to this script, the launch options: prime-run game-performance %command%
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
@@ -22,8 +26,15 @@ no_ini_key() {   # no_ini_key KEY...: none of these keys is set in totk.ini (cas
     done
     return 0
 }
-if [ -z "${TOTK_GPU_NAME:-}" ] && no_ini_key gpu_name gpu_index \
-    && command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L 2>/dev/null | grep -q '^GPU'; then
+nv_list=""
+command -v nvidia-smi >/dev/null 2>&1 && nv_list="$(nvidia-smi -L 2>&1 || true)"
+# After a driver update without a restart the old kernel module stays loaded and the new Vulkan driver refuses it:
+# Vulkan then lists only the other GPU, and the game runs on it or stops with "no usable Vulkan device".
+if printf '%s\n' "$nv_list" | grep -qi 'version mismatch'; then
+    echo "jogar-ocarina.sh: the NVIDIA driver was updated but the old one is still loaded (nvidia-smi: Driver/library" \
+         "version mismatch). Restart the PC to use the NVIDIA GPU." >&2
+fi
+if [ -z "${TOTK_GPU_NAME:-}" ] && no_ini_key gpu_name gpu_index && printf '%s\n' "$nv_list" | grep -q '^GPU'; then
     export TOTK_GPU_NAME=NVIDIA
 fi
 export TOTK_PROFILE_DIR="$root/perfil"
