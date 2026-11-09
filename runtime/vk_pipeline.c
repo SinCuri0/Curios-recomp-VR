@@ -2637,7 +2637,18 @@ static VkPipeline create_graphics(const VkPipeState *s, const GKey *k, const Lay
     uint64_t vw, fw;
     const uint32_t *vcode = gfx_shader_spirv(s->vs, &vw);
     uint32_t *vpatched = NULL, *fpatched = NULL;
-    if (!s->gs && l->set1) {   // independent layouts: outputs from the vertex shader's union
+    // AMD: no outputs are added to a mesh shader. Vertex-style outputs added to a mesh module make AMD's compiler (LLPC,
+    // amdvlk64.dll+0xf3c1af) crash or fail: the same module rebuilt outside the game without them builds in 45 ms
+    // (found by Lu33Y-No-Git, #158; RX 9070 XT #153 #157, RX 5700 XT #188: 9 mesh pipelines failed, the foliage drew no
+    // leaves). The fragment stage reads those inputs undefined, as before outputs were added. OOT_MESH_ADD_OUTPUTS=1: added
+    // anyway (=0 on every GPU).
+    static int mesh_add = -2;
+    if (mesh_add == -2) {
+        const char *e = getenv("OOT_MESH_ADD_OUTPUTS");
+        mesh_add = e && *e ? *e != '0' : -1;
+    }
+    int add_ok = !mesh_vs(s) || (mesh_add == -1 ? !vk_caps.amd : mesh_add);
+    if (!s->gs && l->set1 && add_ok) {   // independent layouts: outputs from the vertex shader's union
         GfxShaderIo fin[32];
         uint32_t missing = vs_union_missing(s, fin);
         if (missing) {
@@ -2657,7 +2668,7 @@ static VkPipeline create_graphics(const VkPipeState *s, const GKey *k, const Lay
                 else if (vout[i].type != fin[i].type)
                     LOG_ONCE("vk_pipeline: varying %d is type %d in the vertex stage, %d in the fragment stage", i, vout[i].type, fin[i].type);
             }
-            if (missing && !l->set1) {
+            if (missing && !l->set1 && add_ok) {
                 uint64_t n2 = 0;
                 vpatched = spirv_add_outputs(vcode, vw, missing, fin, &n2);
                 if (!vpatched) LOG_ONCE("vk_pipeline: cannot add missing vertex outputs (mask %#x)", missing);
@@ -4428,18 +4439,77 @@ static struct {
 } LB = {.stat = PLAT_MUTEX_INIT};
 
 // LOCAL TEST (Ocarina): compute shaders with guarded candidates reach 17-30 MB of SPIR-V; the driver takes a minute or more and over 30 GB
-// for one, and it ran on the replay thread under P.lock: the game froze at the first broken pot. A big shader is built here first, one at a
-// time, so memory stays bounded, and its dispatches are skipped until the pipeline is in the live table.
-// ponytail: a linear table of 1024 shaders and a polling worker; a dispatch skipped this way loses its effect for those frames.
+// for one, and it ran on the replay thread under P.lock: the game froze at the first broken pot. A big shader is built here first, by
+// big_cs_workers() threads, and its dispatches are skipped until the pipeline is in the live table.
+// Each worker takes the smallest queued shader, and at most one of them builds a huge one (big_cs_huge_words()) at a time, so memory
+// stays bounded and a huge build never holds the others. One worker taking the queue in order let a 346,302-word Kokiri shader
+// (c968ad44272dcbb4, 504 s on NVIDIA 621.01) hold every big shader met after it: the exposure (435a0138b9013040) and volumetric fog
+// (ee7764a6b1ef459c, 27ee9883e2a20323) passes and the falling leaves were skipped for the whole of a first session after an update
+// (washed-out picture, leaves still in the air, #167).
+// ponytail: a linear table of 8192 shaders and polling workers; a dispatch skipped this way loses its effect for those frames.
 // TOTK_ASYNC_CS_WORDS (default: the big-shader size; opt-in lower, e.g. 1024 on AMD): compute shaders of at least this many words
 // go through the same background build, so the replay thread never compiles one under P.lock. AMD's Windows compiler took
 // seconds to minutes for medium-sized shaders that NVIDIA builds in milliseconds, and the game froze for minutes at the
 // first area (RX 5500 XT, driver 26.10.1). Only big shaders (big_cs_words) are built without optimization. Medium shaders
 // get ASYNC_CS_MEDIUM workers of their own, so they do not queue behind a giant one.
-enum { BIG_CS_N = 8192, ASYNC_CS_MEDIUM = 2 };
-static struct { const GfxShader *cs; volatile int done, claimed; uint8_t big; } big_cs[BIG_CS_N];
+enum { BIG_CS_N = 8192, BIG_CS_MAX_THREADS = 4, ASYNC_CS_MEDIUM = 2 };
+enum { BIG_CS_QUEUED, BIG_CS_BUILDING, BIG_CS_DONE };
+static struct { const GfxShader *cs; uint64_t words; volatile int state; uint8_t big; } big_cs[BIG_CS_N];
 static volatile int big_cs_n;
 static int big_cs_thread;
+static PlatMutex big_cs_lock = PLAT_MUTEX_INIT;   // big_cs[].state from BIG_CS_QUEUED, big_cs_huge_busy
+static int big_cs_huge_busy;
+
+// OOT_BIG_CS_THREADS: workers building big compute shaders (at most BIG_CS_MAX_THREADS). Default 2 with 24 GB of RAM or more,
+// else 1: the 346,302-word shader alone took 5.9 GB of RAM for 504 s (RTX 4090, driver 621.01), and the README's minimum is 16 GB.
+static int big_cs_workers(void) {
+    static int n;
+    if (!n) {
+        const char *e = getenv("OOT_BIG_CS_THREADS");
+        float used = 0, total = 0, proc = 0;
+        if (!e) plat_mem_info(&used, &total, &proc);
+        int v = e ? atoi(e) : total >= 24.0f * 1024 ? 2 : 1;
+        n = v < 1 ? 1 : v > BIG_CS_MAX_THREADS ? BIG_CS_MAX_THREADS : v;
+    }
+    return n;
+}
+
+// OOT_BIG_CS_HUGE: SPIR-V words from which a big compute shader counts as huge: one worker at a time builds those (default 262144;
+// Kokiri meets 346-393 K word shaders, the rest are 33-260 K).
+static uint64_t big_cs_huge_words(void) {
+    static uint64_t w;
+    if (!w) {
+        const char *e = getenv("OOT_BIG_CS_HUGE");
+        w = e && strtoull(e, NULL, 0) ? strtoull(e, NULL, 0) : 262144;
+    }
+    return w;
+}
+
+// The queued shader a worker builds next: the smallest, skipping huge ones while another worker builds one, and big ones for
+// a medium-only worker. -1: none.
+static int big_cs_take(int medium_only) {
+    int best = -1, n = __atomic_load_n(&big_cs_n, __ATOMIC_ACQUIRE);
+    plat_mutex_lock(&big_cs_lock);
+    for (int i = 0; i < n; i++) {
+        if (__atomic_load_n(&big_cs[i].state, __ATOMIC_RELAXED) != BIG_CS_QUEUED) continue;
+        if (medium_only && big_cs[i].big) continue;
+        if (big_cs_huge_busy && big_cs[i].words >= big_cs_huge_words()) continue;
+        if (best < 0 || big_cs[i].words < big_cs[best].words) best = i;
+    }
+    if (best >= 0) {
+        __atomic_store_n(&big_cs[best].state, BIG_CS_BUILDING, __ATOMIC_RELAXED);
+        if (big_cs[best].words >= big_cs_huge_words()) big_cs_huge_busy = 1;
+    }
+    plat_mutex_unlock(&big_cs_lock);
+    return best;
+}
+
+// A worker is done with shader i (built, failed or left for the next start): another may take a huge one.
+static void big_cs_release(int i) {
+    plat_mutex_lock(&big_cs_lock);
+    if (big_cs[i].words >= big_cs_huge_words()) big_cs_huge_busy = 0;
+    plat_mutex_unlock(&big_cs_lock);
+}
 
 // LOCAL TEST (Ocarina): a copy of the shared cache, for --bench-cs with OOT_BENCH_SEED (play seeds its private caches with
 // cache_private). Falls back to an empty cache.
@@ -4478,12 +4548,7 @@ static uint64_t async_cs_words(void) {
 static void big_cs_worker(void *arg) {
     int medium_only = (int)(intptr_t)arg;   // 1: only shaders below big_cs_words
     for (;;) {
-        int n = __atomic_load_n(&big_cs_n, __ATOMIC_ACQUIRE), next = -1;
-        for (int i = 0; i < n && next < 0; i++) {
-            if (__atomic_load_n(&big_cs[i].claimed, __ATOMIC_ACQUIRE) || (medium_only && big_cs[i].big)) continue;
-            int zero = 0;
-            if (__atomic_compare_exchange_n(&big_cs[i].claimed, &zero, 1, 0, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED)) next = i;
-        }
+        int next = big_cs_take(medium_only);
         if (next < 0) {
             plat_sleep_ms(5);
             continue;
@@ -4504,6 +4569,7 @@ static void big_cs_worker(void *arg) {
         cs_build_cache = VK_NULL_HANDLE;
         if (!pipe && tl_deferred) {   // left for the next start (big compiles): not done, so its dispatches stay skipped
             if (own) vkDestroyPipelineCache(P.device, own, NULL);
+            big_cs_release(next);     // stays BIG_CS_BUILDING: no worker takes it again this run
             continue;
         }
         // Kept, as lb_compute keeps its pipelines: built again on the replay thread, the driver's cache missed and the game froze for
@@ -4523,9 +4589,10 @@ static void big_cs_worker(void *arg) {
         }
         double secs = (double)(plat_now_ns() - t0) / 1e9;
         if (big_cs[next].big || secs >= 1.0 || !built)
-            rt_log("vk_pipeline: %s compute shader %d built in %.1f s%s", big_cs[next].big ? "big" : "background", next, secs,
-                   built ? "" : " (failed)");
-        __atomic_store_n(&big_cs[next].done, 1, __ATOMIC_RELEASE);
+            rt_log("vk_pipeline: %s compute shader %d (%llu words) built in %.1f s%s", big_cs[next].big ? "big" : "background", next,
+                   (unsigned long long)big_cs[next].words, secs, built ? "" : " (failed)");
+        big_cs_release(next);
+        __atomic_store_n(&big_cs[next].state, BIG_CS_DONE, __ATOMIC_RELEASE);
         if (own) {
             if (built) cache_publish(own);
             else vkDestroyPipelineCache(P.device, own, NULL);
@@ -4713,7 +4780,20 @@ int vk_pipeline_warm_big_cs(void) {
     fflush(stdout);
     uint64_t t_all = plat_now_ns();
     int failed = 0;
+    // OOT_WARM_BUDGET_S: no new build starts after that many seconds (the installer sets it; an AMD card took 3 hours for
+    // the list, #188). What is left is built in play as before; the list is smallest first, so the quick ones are done.
+    const char *be = getenv("OOT_WARM_BUDGET_S");
+    double budget = be ? atof(be) : 0;
     for (size_t i = 0; i < m; i++) {
+        double spent = (double)(plat_now_ns() - t_all) / 1e9;
+        if (budget > 0 && spent > budget) {
+            printf("warm-big-cs: time budget of %.0f s reached after %zu of %zu: the %zu left are built in play\n", budget, i, m,
+                   m - i);
+            break;
+        }
+        // "[i/m]": the installer's progress bar reads it (Instalar-Ocarina.ps1 Atualizar)
+        printf("warm-big-cs: [%zu/%zu] building a compute shader of %llu words\n", i + 1, m, (unsigned long long)tw[i]);
+        fflush(stdout);
         Bindings B = {0};
         const char *why = NULL;
         plat_mutex_lock(&P.lock);
@@ -4741,16 +4821,23 @@ int vk_pipeline_compute_ready(const GfxShader *cs) {
     if (words < async_cs_words()) return 1;
     int n = __atomic_load_n(&big_cs_n, __ATOMIC_RELAXED);   // only the replay thread adds
     for (int i = 0; i < n; i++)
-        if (big_cs[i].cs == cs) return __atomic_load_n(&big_cs[i].done, __ATOMIC_ACQUIRE);
+        if (big_cs[i].cs == cs) return __atomic_load_n(&big_cs[i].state, __ATOMIC_ACQUIRE) == BIG_CS_DONE;
     if (n == BIG_CS_N) return 1;
     if (!big_cs_thread) {
-        big_cs_thread = plat_thread_spawn(big_cs_worker, (void *)(intptr_t)0, "big compute", 0) ? 1 : -1;
-        if (big_cs_thread > 0 && async_cs_words() < big_cs_words())
+        int started = 0;
+        for (int i = 0; i < big_cs_workers(); i++)
+            started += plat_thread_spawn(big_cs_worker, (void *)(intptr_t)0, "big compute", 0) != 0;
+        big_cs_thread = started ? started : -1;
+        rt_log("vk_pipeline: %d big compute workers (OOT_BIG_CS_THREADS), smallest first, one huge (%llu+ words, OOT_BIG_CS_HUGE) at a time",
+               started, (unsigned long long)big_cs_huge_words());
+        if (started && async_cs_words() < big_cs_words())
             for (int i = 0; i < ASYNC_CS_MEDIUM; i++) plat_thread_spawn(big_cs_worker, (void *)(intptr_t)1, "compute builder", 0);
     }
     if (big_cs_thread < 0) return 1;
     big_cs[n].cs = cs;
+    big_cs[n].words = words;
     big_cs[n].big = words >= big_cs_words();
+    __atomic_store_n(&big_cs[n].state, BIG_CS_QUEUED, __ATOMIC_RELAXED);
     __atomic_store_n(&big_cs_n, n + 1, __ATOMIC_RELEASE);
     return 0;
 }

@@ -6,6 +6,18 @@
 
 The game's code is translated to C and compiled into a Windows program. The Switch 2 graphics are converted to Vulkan. All of this happens **on your PC, from your own copy of the game**.
 
+> [!NOTE]
+> **Change of direction (November 2026).** To play, we now recommend [Hookshot](https://github.com/NotRexed/Hookshot): it also builds the game on your PC from your own copy.
+>
+> We compared both on the same PC (RTX 5090) with the same saves:
+>
+> - both hold 60 fps, and Hookshot renders at a higher resolution for the same cost;
+> - Hookshot draws vegetation that is missing or wrong here (the hedges in the Temple of Time courtyard, for example).
+>
+> From now on our fixes go to Hookshot as contributions. This repository stays as a Portuguese-language support point: questions, reports and guides.
+>
+> **Your saves still work:** they are the same files. They are in the `perfil\save` folder of the install. Hookshot's save guide ([docs/saves.md](https://github.com/NotRexed/Hookshot/blob/main/docs/saves.md)) shows how to copy them.
+
 > [!IMPORTANT]
 > This repository **does not contain the game, keys or an executable**, and it does not explain how to get them. You need your own copy. Everything the installation creates (`ocarina.exe`, the generated code, the shader cache and the saves) comes from your game: **do not share it**.
 

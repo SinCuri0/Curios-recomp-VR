@@ -70,9 +70,16 @@ NVN_API(nvnMemoryPoolInvalidateMappedRange) {
     int64_t off = (int64_t)arg_x(c, 1);
     if (off >= 0) nvn_pool_invalidate(arg_p(c, 0), (uint64_t)off, arg_x(c, 2));
 }
-// void nvnBufferInvalidateMappedRange(const NVNbuffer *b, ptrdiff_t offset, size_t size): buffers are pool storage,
-// which the GPU writes directly
-NVN_API(nvnBufferInvalidateMappedRange) { (void)c; }
+// void nvnBufferInvalidateMappedRange(const NVNbuffer *b, ptrdiff_t offset, size_t size): buffers are pool storage;
+// the read waits for the GPU writes still on their way to it (OoT's exposure meter reads its GPU sum this way)
+NVN_API(nvnBufferInvalidateMappedRange) {
+    const buf_t *o = arg_p(c, 0);
+    int64_t off = (int64_t)arg_x(c, 1);
+    uint64_t size = arg_x(c, 2);
+    if (!o || !o->pool || off < 0 || (uint64_t)off > o->size) return;
+    if (size > o->size - (uint64_t)off) size = o->size - (uint64_t)off;
+    nvn_pool_invalidate(o->pool, o->off + (uint64_t)off, size);
+}
 
 // ---------- texture builder and texture queries
 static const tex_builder_t *tb_of(const Cpu *c) { return arg_p(c, 0); }

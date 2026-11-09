@@ -20,6 +20,7 @@
 #include "nvn_api.h"
 #include "nvn_pool_index.h"
 #include "vk.h"
+#include "vk_exec.h"
 #include "platform/platform.h"
 
 // Timestamps for the tracking cost, in ns; qpc_ms converts.
@@ -1054,7 +1055,7 @@ static int query_stamp(uint64_t lo, uint64_t hi, uint32_t g) {
 //   reports it at the fence (vk_gpu_written), which copies those bytes back into guest memory. Until then the CPU
 //   copies skip them: a page the CPU and the GPU both write keeps the GPU's bytes.
 // TOTK_SHADOW=1/0 forces the mode on or off; the default is on for Linux except on NVIDIA (#74).
-typedef struct { uint64_t lo, hi; } SRange;
+typedef struct { uint64_t lo, hi, fence; } SRange;
 static PlatMutex shadow_lock = PLAT_MUTEX_INIT;   // after pool_lock; before gen_lock
 static PoolRec **stouch;                          // shadow_lock: pools resolved since the last sync
 static int nstouch, cstouch;
@@ -1062,6 +1063,61 @@ static SRange *spend;                             // shadow_lock: GPU writes rec
 static int nspend, cspend;
 static int64_t s_live_n, s_live_bytes;            // shadow_lock
 static uint64_t s_syncs, s_copied, s_queries, s_untracked, s_wb_bytes, s_ticks;   // shadow_lock: since the last log
+
+// ------------------------------------------------------------------ buffer write fences
+// Guest memory a GPU write still has to reach: mirror write-backs recorded for a submission, shadow writes queued for
+// it, and GPU writes into an imported buffer (whose memory is guest memory itself). The game may read such a range as
+// soon as it has handed the work over, before the fence: OoT's exposure meter sums the frame on the GPU, invalidates
+// the buffer and reads it. Without the wait it reads the old sum, sets it to 0, and the old sum comes back over that 0
+// on the next sync (a 2x add): white flashes and fog flicker. Port of the Miojo Linux package's fix (2026-11-09).
+typedef struct { uint64_t lo, hi, fence; } BFence;
+static BFence *bfence;
+static int nbfence, cbfence;
+static PlatMutex bfence_lock = PLAT_MUTEX_INIT;
+
+static void bfence_prune(void) {   // bfence_lock held
+    uint64_t done = vk_sync_fence_done();
+    int k = 0;
+    for (int i = 0; i < nbfence; i++)
+        if (bfence[i].fence > done) bfence[k++] = bfence[i];
+    nbfence = k;
+}
+
+static void bfence_add(uint64_t lo, uint64_t hi, uint64_t fence) {
+    if (!fence || lo >= hi) return;
+    plat_mutex_lock(&bfence_lock);
+    bfence_prune();
+    if (nbfence == cbfence) {
+        int cap = cbfence ? cbfence * 2 : 64;
+        BFence *p = realloc(bfence, (size_t)cap * sizeof *p);
+        if (!p) {   // cannot remember it: a later read may see stale bytes, but the game keeps running
+            static int told;
+            if (!told++) rt_log("mem: out of memory for buffer write fences");
+            plat_mutex_unlock(&bfence_lock);
+            return;
+        }
+        bfence = p, cbfence = cap;
+    }
+    bfence[nbfence++] = (BFence){lo, hi, fence};
+    plat_mutex_unlock(&bfence_lock);
+}
+
+uint64_t vk_mem_written_fence(uint64_t addr, uint64_t size) {
+    if (!size) return 0;
+    uint64_t end = addr + size, f = 0;
+    plat_mutex_lock(&bfence_lock);
+    bfence_prune();
+    for (int i = 0; i < nbfence; i++)
+        if (bfence[i].lo < end && bfence[i].hi > addr && bfence[i].fence > f) f = bfence[i].fence;
+    plat_mutex_unlock(&bfence_lock);
+    if (shadow_on) {
+        plat_mutex_lock(&shadow_lock);
+        for (int i = 0; i < nspend; i++)
+            if (spend[i].lo < end && spend[i].hi > addr && spend[i].fence > f) f = spend[i].fence;
+        plat_mutex_unlock(&shadow_lock);
+    }
+    return f;
+}
 
 static int shadow_pool(VkCtx *c, PoolRec *r, uint64_t addr, uint64_t size) {
     r->import_lo = addr & ~0xfffull;
@@ -1184,7 +1240,7 @@ void vk_mem_gpu_pending(uint64_t addr, uint64_t size) {
     if (!shadow_on || !size) return;
     plat_mutex_lock(&shadow_lock);
     if (nspend == cspend) grow((void **)&spend, &cspend, sizeof *spend);
-    spend[nspend++] = (SRange){addr, addr + size};
+    spend[nspend++] = (SRange){addr, addr + size, vk_exec_recording_fence()};
     plat_mutex_unlock(&shadow_lock);
 }
 
@@ -1735,8 +1791,19 @@ int vk_mem_mirror_probe(uint64_t addr) {
 
 void vk_mem_gpu_wrote(const VkMemSpan *sp, uint64_t size) {
     PoolRec *r = sp->pool;
-    if (!r || r->mstate != MS_ON || sp->buffer != r->mbuf || !size) return;
-    range_add(&wbl, &nwbl, &cwbl, r, sp->offset, size);
+    if (!r || !size) return;
+    if (r->mstate == MS_ON && sp->buffer == r->mbuf) {
+        range_add(&wbl, &nwbl, &cwbl, r, sp->offset, size);   // written back at vk_mem_mirror_end
+        return;
+    }
+    // An imported buffer (or a mirror span outside its window) is guest memory itself: the GPU writes it directly, and a
+    // CPU read must wait for the submission that does. Keep the range's fence until it is done.
+    if (r->kind != POOL_IMPORT) return;
+    uint64_t fence = vk_exec_recording_fence();
+    if (!fence) return;
+    uint64_t lo = r->import_lo + sp->guest_offset, hi = lo + size;
+    if (hi > r->import_hi) hi = r->import_hi;
+    bfence_add(lo, hi, fence);
 }
 
 void nvn_pool_flushed(const pool_t *p, uint64_t off, uint64_t size) {
@@ -1923,6 +1990,15 @@ int vk_mem_mirror_end(VkCommandBuffer cb, uint64_t fence) {
         for (int i = 0; i < nwbl; i++) wbl[i].r->wb_sub = msub;
         mrep.wb_ranges += (uint64_t)nwbl;
         rec += copy_ranges(cb, wbl, nwbl, 0, &mrep.wb_bytes, &mrep.wb_copies) + 2;
+        // The write-back reaches guest memory when this submission does: remember each range with its fence, so a CPU
+        // read that beats the fence waits for it instead of reading the bytes from before the GPU write.
+        for (int i = 0; i < nwbl; i++) {
+            PoolRec *r = wbl[i].r;
+            uint64_t lim = r->mirror_hi - r->mirror_lo, off = wbl[i].off, n = wbl[i].size;
+            if (off >= lim) continue;
+            if (off + n > lim) n = lim - off;
+            bfence_add(r->import_lo + off + r->mirror_lo, r->import_lo + off + r->mirror_lo + n, fence);
+        }
         mbarrier(cb, VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
                  VK_PIPELINE_STAGE_2_HOST_BIT | VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
                  VK_ACCESS_2_HOST_READ_BIT | VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);

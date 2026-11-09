@@ -590,6 +590,15 @@ static int read_nowait(uint64_t addr, uint64_t size, uint64_t f) {
 }
 
 static void vk_be_guest_read(uint64_t addr, uint64_t size) {
+    // A GPU write into guest memory (a mirror write-back, a shadow write-back, or a write into an imported buffer)
+    // reaches it at its submission's fence; the game may read the range as soon as it has handed the work over (OoT's
+    // exposure meter): wait for the newest such fence before returning the bytes.
+    if (gfx_replay_async()) vk_sync_start(), vk_present_drain();   // the write-back is recorded by the replay
+    uint64_t wf = vk_mem_written_fence(addr, size);
+    if (wf && vk_sync_fence_done() < wf) {
+        NVN_BLOCKING();
+        vk_sync_fence_wait(wf, UINT64_MAX);
+    }
     if (!vk_texture_cpu_stale(addr, size)) return;
     vk_sync_start();
     if (gfx_replay_async()) {

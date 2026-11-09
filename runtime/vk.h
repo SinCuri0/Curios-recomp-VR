@@ -418,6 +418,10 @@ void vk_sync_start(void);                  // vk_init (fatal without a device) a
 uint64_t vk_sync_submit(const uint64_t *handles, int n, uint64_t submitted_ticks); // immutable front-end entry tick
 uint64_t vk_sync_reserve(void);            // asynchronous replay: the value the next queued submission signals
 int vk_sync_fence_wait(uint64_t value, uint64_t timeout_ns);   // 1 when done; 0 on timeout or a value never submitted
+// The newest timeline value whose completion may still change guest memory in [addr, addr + size): a mirror write-back
+// recorded for it, a shadow write-back queued for it, or a GPU write into an imported buffer. 0 when the range is
+// current. A CPU read of a range a GPU writes waits for it first (vk_backend.c guest_read).
+uint64_t vk_mem_written_fence(uint64_t addr, uint64_t size);
 uint64_t vk_sync_fence_done(void);         // highest done value
 uint64_t vk_sync_issued(void);             // newest submitted value (the one being recorded is this + 1)
 void vk_sync_finish(void);                 // every submitted value done

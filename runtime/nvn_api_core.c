@@ -643,10 +643,24 @@ NVN_API(nvnQueueSubmitCommands) {
     while (f > prev && !__atomic_compare_exchange_n(&last_fence, &prev, f, 1, __ATOMIC_RELEASE, __ATOMIC_RELAXED)) {}
     __atomic_store_n(&lod_fence[no % LOD_RING], f, __ATOMIC_RELAXED);
     __atomic_store_n(&lod_issued, no, __ATOMIC_SEQ_CST);
-    {   // LOCAL TEST (Ocarina): OOT_SUBMIT_SYNC=1: the caller waits for replay and GPU, as if the game wrote nothing behind them
-        static int on = -1;
-        if (on < 0) { const char *e = getenv("OOT_SUBMIT_SYNC"); on = !(e && *e == '0'); }   // on by default: the game rewrites data the replay has not reached yet (random NaN frames otherwise)
+    {   // LOCAL TEST (Ocarina): OOT_SUBMIT_SYNC=1: the caller waits for replay and GPU after every submit. It was on by
+        // default against random NaN frames when the game rewrote data before the replay read it; the uniform snapshots
+        // and the write fences cover that now. It kept the CPU and the GPU from ever working at the same time: Hyrule
+        // Field ran at 46 fps with the GPU busy 9 ms of each 22 ms frame, and runs at 60 without it.
+        // Instead each submit waits for the one OOT_SUBMIT_LAG (default 3, 0 none) before it: the CPU and the GPU overlap
+        // and the queue stays near one frame (no wait at all let frame times swing: 47 frames over 25 ms a minute).
+        static int on = -1, lag;
+        if (on < 0) {
+            const char *e = getenv("OOT_SUBMIT_SYNC"), *l = getenv("OOT_SUBMIT_LAG");
+            on = e && *e == '1';
+            lag = l ? atoi(l) : 3;
+            if (lag >= LOD_RING) lag = LOD_RING - 1;
+        }
         if (on) gfx_backend()->fence_wait(f, 400000000);
+        else if (lag > 0 && no > (uint64_t)lag) {
+            uint64_t w = __atomic_load_n(&lod_fence[(no - (uint64_t)lag) % LOD_RING], __ATOMIC_RELAXED);
+            if (w && gfx_backend()->fence_done() < w) gfx_backend()->fence_wait(w, 400000000);
+        }
     }
 }
 

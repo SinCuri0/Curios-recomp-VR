@@ -111,7 +111,7 @@ struct GfxShader {
     int has_c0;
     int is_mesh;                                           // LOCAL TEST (Ocarina): a MeshEXT module in the vertex slot
     int is_task;                                           // LOCAL TEST (Ocarina): a TaskEXT module
-    GfxPtrHint hints[16];                                  // LOCAL TEST (Ocarina): "ptrhint" notes (translator patch 0041)
+    GfxPtrHint hints[16];                                  // LOCAL TEST (Ocarina): "ptrhint" notes (translator patch 0046)
     int nhints;
 };
 
@@ -1205,7 +1205,7 @@ static int reflect(GfxShader *s, int flags) {
         if (!nvn2_c0_valid(&s->c0, NVN2_C0_LIST)) return 0;   // the same bound the dispatch packs against, so a bad layout fails here
         s->has_c0 = 1;
     }
-    // LOCAL TEST (Ocarina): translator patch 0041's "ptrhint" notes, the exact pointers of guarded accesses (Fritchii's forms).
+    // LOCAL TEST (Ocarina): translator patch 0046's "ptrhint" notes, the exact pointers of guarded accesses (Fritchii's forms).
     for (const char *p = js; s->nhints < (int)(sizeof s->hints / sizeof s->hints[0]) && (p = strstr(p, "\"ptrhint ")); p += 9) {
         char kind;
         unsigned slot, a, b;

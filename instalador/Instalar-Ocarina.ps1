@@ -402,10 +402,14 @@ function P-BigShaders() {
     }
     if (-not (Test-Path -LiteralPath $lista)) { Registrar 'shaders grandes: sem lista, passo pulado'; return }
     try {
+        # at most 30 minutes of new builds (an AMD card took 3 hours for the whole list, #188): the rest is built in play
+        $env:OOT_WARM_BUDGET_S = '1800'
         Exec (Join-Path $dir 'ocarina.exe') @('--warm-big-cs') | Out-Null
     } catch {
         if ("$($_.Exception.Message)" -eq 'CANCELADO') { throw }
         Registrar "shaders grandes: nem todos foram montados, o jogo monta os que faltam ao jogar: $($_.Exception.Message)"
+    } finally {
+        Remove-Item Env:OOT_WARM_BUDGET_S -ErrorAction SilentlyContinue
     }
 }
 function P-Finalizar() {
