@@ -1,0 +1,24 @@
+# Code patches for Ocarina of Time 1.1.1 main (build id e0f3ccfaf50065ae4ea01eb5aeb13b1a45da3348), recomp/patches.py.
+# Ported from Fritchii's built-in patches (src/core/file_sys/patch_manager.cpp, branch oot-gather-fix, GPL-3.0-or-later),
+# whose module offsets are these. Each set is switched at start by its key: 0 off, 1 on. In totk.ini the key goes
+# without TOTK_ (OOT_MAX_RESOLUTION = 1), as for every other setting there.
+# Both are off by default. Max Resolution turns the screen black once gameplay starts here (the runtime does not handle
+# the full-size scene yet). Occlusion Off removes the vegetation for good: this runtime's culling depends on the queries.
+
+set maxres    TOTK_OOT_MAX_RESOLUTION 0
+set occlusion TOTK_OOT_OCCLUSION_OFF  0
+
+# Max Resolution: the game takes its "dynamic resolution disabled" path, so the 3D renders at full scale instead of
+# following the GPU-time controller down to its 480p floor. Fritchii branches unconditionally over the flag test
+# (main+0x805bd0 tbz w8, #0 -> b 0x80640c); a lifted site cannot branch, so the flag load before it reads zero instead,
+# which makes the tbz always taken. The target's first instruction (ldr w8, [x19, ...]) overwrites w8.
+site maxres main 805bcc b9409508 2a1f03e8  # ldr w8, [x8, #0x94] -> mov w8, wzr
+
+# Occlusion Off (cLohan's community patch, zortos293/Lichii#641): the game creates no z-prepass occlusion queries and no
+# samples-passed queries, so it issues no occlusion reports or conditional renders; every candidate object is drawn.
+site occlusion main 11ace68 39400008 2a1f03e8  # ldrb w8, [x0] -> mov w8, wzr
+site occlusion main 11acec8 39400008 2a1f03e8
+site occlusion main 11b828c 39400008 2a1f03e8
+site occlusion main 11b82a4 39400008 2a1f03e8
+site occlusion main 11b82dc 39400008 2a1f03e8
+site occlusion main 11b82f4 39400008 2a1f03e8

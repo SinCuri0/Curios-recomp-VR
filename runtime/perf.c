@@ -9,6 +9,7 @@
 #include "flight.h"
 #include "gfx.h"
 #include "host.h"
+#include "input.h"
 #include "nvn_mode_trace.h"
 #include "perfmon.h"
 #include "prof.h"
@@ -275,6 +276,13 @@ void perf_present(uint64_t frame) {
         perfmon_frame(now, d, frame_ns, rep, __atomic_load_n(&counts[PERF_CNT_TEX_UP], __ATOMIC_RELAXED));
     kern_core_diag_frame(frame, d);
     if (flight_on) flight_frame(frame, now, d, frame_ns, counts);
+    {   // LOCAL TEST (Ocarina): F10 captures the vegetation data of the next frames (vk_exec_draw.c vk_capture_now)
+        extern void vk_capture_now(void);
+        static int cap_was;
+        int cap = input_capture_key();
+        if (cap && !cap_was) vk_capture_now();
+        cap_was = cap;
+    }
     if (!(rt_trace & RT_TRACE_PERF)) {
         memset(frame_ns, 0, sizeof frame_ns);
         last = now;

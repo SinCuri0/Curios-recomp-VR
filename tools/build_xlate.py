@@ -97,8 +97,8 @@ def verify_vendor() -> None:
 
 def selected_patches(*, defined_float_minmax: bool = False) -> list[Path]:
     patches = sorted((XLATE / "patches").glob("*.patch"))
-    if len(patches) != 40:
-        sys.exit(f"expected 40 patches, found {len(patches)}")
+    if len(patches) != 41:
+        sys.exit(f"expected 41 patches, found {len(patches)}")
     optional = XLATE / "patches" / DEFINED_FLOAT_MINMAX_PATCH
     if optional not in patches:
         sys.exit(f"missing optional patch: {DEFINED_FLOAT_MINMAX_PATCH}")

@@ -105,7 +105,7 @@ If the hash still differs, this game is not version 1.1.1 and the rest will not 
 ## 6. Convert the game code
 
 ```powershell
-.venv\Scripts\python.exe recomp\gen.py --exefs build\exefs --out generated\oot111 --modules main,sdk,subsdk0
+.venv\Scripts\python.exe recomp\gen.py --exefs build\exefs --out generated\oot111 --modules main,sdk,subsdk0 --patches recomp\patches-oot111.txt
 .venv\Scripts\python.exe tools\oot\patch_generated.py generated\oot111
 ```
 

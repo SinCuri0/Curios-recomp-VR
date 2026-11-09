@@ -3,7 +3,9 @@
 // translator reads it, and a synthetic control block carries the fields the host reads.
 #include <cstdint>
 #include <cstdlib>
+#include <cstdio>
 #include <cstring>
+#include <string>
 #include <map>
 #include <mutex>
 #include <unordered_map>
@@ -71,6 +73,20 @@ Lowered *lower(const uint8_t *control, const uint8_t *code) {
                                      : sph_type == 3 ? Shader::Ampere::TessellationStage::Evaluation
                                                      : Shader::Ampere::TessellationStage::None;
     const auto lowered = Shader::Ampere::LowerToMaxwell(native, lower_options);
+    // OOT_LOWER_REJECT=<hash>,<hash>,...: these programs (the hashes of the "Ampere lowering failed" lines) are treated
+    // as not lowered, as Fritchii's EDEN_NX2_REJECT does, to find which newly lowered program changes a frame.
+    static const std::string reject_list = [] {
+        const char *e = std::getenv("OOT_LOWER_REJECT");
+        return e && *e ? "," + std::string(e) + "," : std::string();
+    }();
+    if (lowered && !reject_list.empty()) {
+        char key[24];
+        std::snprintf(key, sizeof key, ",%016llx,", (unsigned long long)gfx_shader_nvn2_hash(control, code));
+        if (reject_list.find(key) != std::string::npos) {
+            rt_log("nvn2: %s rejected by OOT_LOWER_REJECT", key);
+            return nullptr;
+        }
+    }
     if (!lowered) {
         rt_log("nvn2: Ampere lowering failed for %016llx at +%#x: %.*s", (unsigned long long)gfx_shader_nvn2_hash(control, code), lowered.error_offset, (int)lowered.error.size(),
                lowered.error.data());

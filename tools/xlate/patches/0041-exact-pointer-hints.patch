@@ -1,0 +1,254 @@
+--- a/src/Ryujinx.Graphics.Shader/Translation/Optimizations/GlobalToStorage.cs
++++ b/src/Ryujinx.Graphics.Shader/Translation/Optimizations/GlobalToStorage.cs
+@@ -454,6 +454,8 @@ namespace Ryujinx.Graphics.Shader.Translation.Optimizations
+                 throw new NotSupportedException("Storage candidates v1 supports aligned 32-bit global operations only.");
+             }
+ 
++            NotePointerForms(resourceManager, gpuAccessor, operation.GetSource(0));
++
+             bool storageUnaligned = gpuAccessor.QueryHasUnalignedStorageBuffer();
+             int alignment = storageUnaligned ? gpuAccessor.QueryHostStorageBufferOffsetAlignment() : 1;
+             if (storageUnaligned && (alignment < 4 || (alignment & (alignment - 1)) != 0))
+@@ -596,6 +598,242 @@ namespace Ryujinx.Graphics.Shader.Translation.Optimizations
+             return gtsContext.AddFunction(operation, true, candidates, function, guarded: true);
+         }
+ 
++        // LOCAL TEST (Ocarina), ported from Fritchii 8262db06f and 749e026c1: the exact pointers a guarded access can
++        // reach, which the runtime puts first in its list of candidates (vk_exec_draw.c dyn_collect, "ptrhint" notes):
++        //   "ptrhint i <slot> <word> <K>": the pointer is loaded from memory at K bytes past the pointer in c<slot>[word].
++        //     Ocarina's culling passes read their instance tables this way; unlisted, every instance was culled.
++        //   "ptrhint a <slot> <first> <stride>": the pointer is read from c<slot> at a run-time byte offset first + i * stride
++        //     (one table per object type); every slot of the array is a candidate.
++        // Phis and selects of the address and of the array offset are followed, as Fritchii does.
++        private static void NotePointerForms(ResourceManager resourceManager, IGpuAccessor gpuAccessor, Operand address)
++        {
++            HashSet<string> notes = [];
++            Queue<Operand> pending = new();
++            HashSet<Operand> seen = [];
++            pending.Enqueue(address);
++            while (pending.TryDequeue(out Operand o))
++            {
++                if (!seen.Add(o) || seen.Count > 4096)
++                {
++                    continue;
++                }
++
++                if (o.AsgOp is PhiNode phi)
++                {
++                    for (int i = 0; i < phi.SourcesCount; i++)
++                    {
++                        pending.Enqueue(phi.GetSource(i));
++                    }
++
++                    continue;
++                }
++
++                if (o.AsgOp is not Operation op)
++                {
++                    continue;
++                }
++
++                // A global load turned into a call of its storage helper: Call(id, address low, address high).
++                if (op.Inst == Instruction.Call && op.SourcesCount >= 3 &&
++                    TryCbufPlusConst(op.GetSource(1), out int slot, out int word, out int k) && k >= 0 && (k & 7) == 0)
++                {
++                    notes.Add($"ptrhint i {slot} {word} {k}");
++                }
++                else if (op.Inst == Instruction.Load && op.StorageKind == StorageKind.ConstantBuffer && op.SourcesCount >= 3 &&
++                         op.GetSource(0).Type == OperandType.Constant &&
++                         resourceManager.TryGetConstantBufferSlot(op.GetSource(0).Value, out int cslot) &&
++                         TryConstantBufferByteAddress(op.GetSource(2), out Operand byteAddress))
++                {
++                    List<(int First, int Stride)> slots = [];
++                    CollectPointerSlots(byteAddress, slots, [], 0);
++                    foreach ((int first, int stride) in slots)
++                    {
++                        if (first >= 0 && (first & 7) == 0 && stride >= 0 && (stride & 7) == 0)
++                        {
++                            notes.Add($"ptrhint a {cslot} {first} {stride}");
++                        }
++                    }
++                }
++
++                for (int i = 0; i < op.SourcesCount; i++)
++                {
++                    pending.Enqueue(op.GetSource(i));
++                }
++            }
++
++            foreach (string note in notes)
++            {
++                gpuAccessor.Log(note);
++            }
++        }
++
++        // c<slot>[word] + K, through additions of constants and copies.
++        private static bool TryCbufPlusConst(Operand o, out int slot, out int word, out int k)
++        {
++            slot = word = k = 0;
++            for (int depth = 0; depth < 8; depth++)
++            {
++                if (o.Type == OperandType.ConstantBuffer)
++                {
++                    slot = o.GetCbufSlot();
++                    word = o.GetCbufOffset();
++                    return true;
++                }
++
++                if (o.AsgOp is not Operation op)
++                {
++                    return false;
++                }
++
++                if (op.Inst == Instruction.Copy)
++                {
++                    o = op.GetSource(0);
++                }
++                else if (op.Inst == Instruction.Add && op.GetSource(1).Type == OperandType.Constant)
++                {
++                    k += op.GetSource(1).Value;
++                    o = op.GetSource(0);
++                }
++                else if (op.Inst == Instruction.Add && op.GetSource(0).Type == OperandType.Constant)
++                {
++                    k += op.GetSource(0).Value;
++                    o = op.GetSource(1);
++                }
++                else
++                {
++                    return false;
++                }
++            }
++
++            return false;
++        }
++
++        // An LDC at a run-time address (InstEmitMemory Ldc): vecIndex = ((srcA + imm) >> 2 [+ word]) >> 2. Returns
++        // srcA + imm, the byte address, for the low word only (an even word of a 64-bit read).
++        private static bool TryConstantBufferByteAddress(Operand vecIndex, out Operand byteAddress)
++        {
++            byteAddress = null;
++            if (vecIndex.AsgOp is not Operation shr || shr.Inst != Instruction.ShiftRightU32 ||
++                shr.GetSource(1).Type != OperandType.Constant || shr.GetSource(1).Value != 2)
++            {
++                return false;
++            }
++
++            Operand words = shr.GetSource(0);
++            if (words.AsgOp is Operation add && add.Inst == Instruction.Add && add.GetSource(1).Type == OperandType.Constant)
++            {
++                if (add.GetSource(1).Value != 0)
++                {
++                    return false;   // the high word of a 64-bit read: its low word is noted
++                }
++
++                words = add.GetSource(0);
++            }
++
++            if (words.AsgOp is not Operation shr2 || shr2.Inst != Instruction.ShiftRightU32 ||
++                shr2.GetSource(1).Type != OperandType.Constant || shr2.GetSource(1).Value != 2)
++            {
++                return false;
++            }
++
++            byteAddress = shr2.GetSource(0);
++            return true;
++        }
++
++        // Fritchii CollectPointerSlots/DynamicPointerSlots: (x << s) + base or x * stride + base gives (base, stride);
++        // a constant gives (value, 0); phis and selects contribute each input.
++        private static void CollectPointerSlots(Operand offset, List<(int First, int Stride)> slots, HashSet<Operand> visited, int depth)
++        {
++            if (depth > 16 || slots.Count >= 8)
++            {
++                return;
++            }
++
++            if (offset.Type == OperandType.Constant)
++            {
++                if (!slots.Contains((offset.Value, 0)))
++                {
++                    slots.Add((offset.Value, 0));
++                }
++
++                return;
++            }
++
++            if (!visited.Add(offset))
++            {
++                return;
++            }
++
++            if (offset.AsgOp is PhiNode phi)
++            {
++                for (int i = 0; i < phi.SourcesCount; i++)
++                {
++                    CollectPointerSlots(phi.GetSource(i), slots, visited, depth + 1);
++                }
++
++                return;
++            }
++
++            if (offset.AsgOp is not Operation op)
++            {
++                return;
++            }
++
++            int Stride(Operand v)
++            {
++                if (v.AsgOp is Operation s && s.SourcesCount == 2 && s.GetSource(1).Type == OperandType.Constant)
++                {
++                    if (s.Inst == Instruction.ShiftLeft && s.GetSource(1).Value is >= 0 and < 16)
++                    {
++                        return 1 << s.GetSource(1).Value;
++                    }
++
++                    if (s.Inst == Instruction.Multiply)
++                    {
++                        return s.GetSource(1).Value;
++                    }
++                }
++
++                return 0;
++            }
++
++            switch (op.Inst)
++            {
++                case Instruction.Copy:
++                    CollectPointerSlots(op.GetSource(0), slots, visited, depth + 1);
++                    return;
++                case Instruction.ConditionalSelect:
++                    CollectPointerSlots(op.GetSource(1), slots, visited, depth + 1);
++                    CollectPointerSlots(op.GetSource(2), slots, visited, depth + 1);
++                    return;
++            }
++
++            int stride = Stride(offset);
++            if (stride >= 8)
++            {
++                if (!slots.Contains((0, stride)))
++                {
++                    slots.Add((0, stride));
++                }
++
++                return;
++            }
++
++            if (op.Inst == Instruction.Add)
++            {
++                for (int arg = 0; arg < 2; arg++)
++                {
++                    Operand c = op.GetSource(arg ^ 1);
++                    int s = Stride(op.GetSource(arg));
++                    if (c.Type == OperandType.Constant && s >= 8 && !slots.Contains((c.Value, s)))
++                    {
++                        slots.Add((c.Value, s));
++                        return;
++                    }
++                }
++            }
++        }
++
+         private static bool CanUseInlineStorageOp(Operation operation, TargetLanguage targetLanguage)
+         {
+             if (operation.StorageKind != StorageKind.GlobalMemory)

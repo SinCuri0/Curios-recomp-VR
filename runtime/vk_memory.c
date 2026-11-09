@@ -1562,10 +1562,17 @@ static void mirror_create(PoolRec *r) {
         for (uint32_t h = 0; h < c->mem_props.memoryHeapCount && h < VK_MAX_MEMORY_HEAPS; h++)
             if (c->mem_props.memoryHeaps[h].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT && c->mem_props.memoryHeaps[h].size > heap)
                 heap = c->mem_props.memoryHeaps[h].size;
-        mirror_cap = s && *s ? (int64_t)atoll(s) << 20 : heap && heap <= (12ull << 30) ? (int64_t)(heap / 8 < (1ull << 30) ? heap / 8 : 1ull << 30) : 0;
+        // Bigger cards get the 1 GiB cap too: the budget Windows gives this process can shrink during play. A 16 GiB
+        // RTX 5070 Ti started with a 15.3 GiB budget, which fell to 11.4 GiB in the forest while mirrors reached 2.97 GiB,
+        // and the frame rate fell to 10-12 fps as on the 12 GiB cards above.
+        uint64_t vram_used = 0, vram_budget = 0;
+        int vram_exact = 0;
+        vk_mem_vram(&vram_used, &vram_budget, &vram_exact);
+        uint64_t share = heap;
+        mirror_cap = s && *s ? (int64_t)atoll(s) << 20 : share ? (int64_t)(share / 8 < (1ull << 30) ? share / 8 : 1ull << 30) : 0;
         if (mirror_cap < 0) mirror_cap = 0;
-        rt_log("mem: mirrors capped at %.0f MiB (0 = no cap; device-local heap %.0f MiB)", mirror_cap / 1048576.0,
-               heap / 1048576.0);
+        rt_log("mem: mirrors capped at %.0f MiB (0 = no cap; device-local heap %.0f MiB, budget %.0f MiB)", mirror_cap / 1048576.0,
+               heap / 1048576.0, vram_budget / 1048576.0);
     }
     if (mirror_cap && m_live_bytes + (int64_t)n > mirror_cap) {
         char why[128];

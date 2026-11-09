@@ -99,7 +99,7 @@ try {
     Cmd $py tools\build_xlate.py
 
     Etapa 4 (L 'Converter o código do jogo' 'Convert the game code') (L 'Traduz o código do jogo para C em generated\oot111.' 'Translates the game code to C in generated\oot111.')
-    Cmd $py recomp\gen.py --exefs build\exefs --out generated\oot111 --modules 'main,sdk,subsdk0'
+    Cmd $py recomp\gen.py --exefs build\exefs --out generated\oot111 --modules 'main,sdk,subsdk0' --patches recomp\patches-oot111.txt
     Cmd $py tools\oot\patch_generated.py generated\oot111
 
     Etapa 5 (L 'Preparar os arquivos do jogo' 'Prepare the game files') (L 'Monta a imagem de 26 GB em build\romfs. O seu arquivo original não é alterado.' 'Builds the 26 GB image in build\romfs. Your original file is not changed.')

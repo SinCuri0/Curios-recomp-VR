@@ -579,6 +579,20 @@ static void describe_bindings(Str *b, const VkExec *ex, const VkPipeInfo *info) 
                 if (ex->ssbo[st][k].addr)
                     sp(b, " %d=%#llx+%#llx", k, (unsigned long long)ex->ssbo[st][k].addr, (unsigned long long)ex->ssbo[st][k].size);
             sp(b, "\n");
+            // TOTK_DUMP_UBO: the first 512 bytes of the slot the address comes from (c0 tables: VS 0x110, FS 0x510), as
+            // guest memory holds them; shows whether per-draw storage data changes from frame to frame.
+            int off = r->handle * 4, base = st == 0 ? 0x110 : st == 1 ? 0x510 : -1;   // nvn_stage: 0 vs, 1 fs (stn)
+            int sl = base >= 0 && r->cbuf_slot == 0 && off >= base && off < base + 0x100 && (off - base) % 16 == 0 ? (off - base) / 16 : -1;
+            VkMemSpan ms;
+            if (dump_ubo && sl >= 0 && ex->ssbo[st][sl].addr && vk_mem_resolve(ex->ssbo[st][sl].addr, 1, &ms)) {
+                uint64_t n = ex->ssbo[st][sl].size && ex->ssbo[st][sl].size < ms.avail ? ex->ssbo[st][sl].size : ms.avail;
+                const float *f = (const float *)(uintptr_t)ex->ssbo[st][sl].addr;
+                sp(b, "      slot %d data:", sl);
+                for (uint64_t k = 0; k < 32 && (k + 1) * 16 <= n; k++)
+                    sp(b, "%s[%llu] %g %g %g %g", k % 4 ? " " : "\n      ", (unsigned long long)k, f[4 * k], f[4 * k + 1],
+                       f[4 * k + 2], f[4 * k + 3]);
+                sp(b, "\n");
+            }
             continue;
         }
         if (r && bd->kind == GFX_RES_UBO && dump_ubo && r->slot >= 3 && r->slot - 3 < 18) {
@@ -789,6 +803,18 @@ void vk_dump_dispatch(VkExec *ex, const GfxShader *cs, VkPipeline p, const VkPip
     last_targets = 0;
     Str b = {0};
     describe_bindings(&b, ex, info);
+    if (dump_ubo)   // compute uniform buffers: address, size and the 16 bytes at +0x160 (where the leaf simulation reads its time)
+        for (int k = 0; k < 16; k++) {
+            const p_bind_buf *u = &ex->ubo[5][k];
+            VkMemSpan ms;
+            if (!u->addr) continue;
+            sp(&b, "    cs ubo%d %#llx+%#llx", k, (unsigned long long)u->addr, (unsigned long long)u->size);
+            if (vk_mem_resolve(u->addr + 0x160, 16, &ms)) {
+                const float *f = (const float *)(uintptr_t)(u->addr + 0x160);
+                sp(&b, " +0x160: %g %g %g %g", f[0], f[1], f[2], f[3]);
+            }
+            sp(&b, "\n");
+        }
     fprintf(passes_f, "pass %04d: dispatch %dx%dx%d cs %016llx prog %llu caller %#llx, fence %llu\n%s", n, d->x, d->y,
             d->z, (unsigned long long)shader_hash(cs), (unsigned long long)(ex->prog ? ex->prog->serial : 0),
             (unsigned long long)d->caller, (unsigned long long)ex->fence, b.s ? b.s : "");
@@ -930,6 +956,8 @@ void vk_dump_present(uint64_t frame) {
             fclose(f);
             remove(path);
             dump_frame = frame + 2;
+            if (log_from) log_from = frame + 2, dump_frame = frame + 12;   // TOTK_DUMP_LOG set: log 10 frames, then dump
+            { extern long vk_dyncov_frame; vk_dyncov_frame = (long)frame + 2; }   // OOT_DYN_COV: that frame's compute coverage
             rt_log("vk_dump: dump-now: frame %llu", (unsigned long long)dump_frame);
         }
     }

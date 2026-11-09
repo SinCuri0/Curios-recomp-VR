@@ -107,6 +107,11 @@ typedef struct {
     uint8_t separate;           // TEX: texture and sampler handles are separate
 } GfxShaderRes;
 typedef struct { uint8_t type, comps, packed, scalar_bits; } GfxShaderIo;   // scalar_bits: actual numeric SPIR-V width, 0 unknown
+// LOCAL TEST (Ocarina), translator patch 0041 (Fritchii's exact pointer forms). 'i': the buffer pointer is read from
+// memory at b bytes past the pointer in c<slot>[word a]; 'a': the buffer pointer is read from c<slot> at byte a + i * b
+// (b 0: one slot). vk_exec_draw.c dyn_collect lists these buffers first.
+typedef struct { uint8_t kind, slot; uint32_t a, b; } GfxPtrHint;
+int gfx_shader_ptr_hints(const GfxShader *s, const GfxPtrHint **hints);
 int gfx_shader_is_task(const GfxShader *s);
 int gfx_shader_is_mesh(const GfxShader *s);                 // LOCAL TEST (Ocarina): a mesh program in the vertex slot
 int gfx_shader_stage(const GfxShader *s);                   // GFX_STAGE_VS, GFX_STAGE_GS, GFX_STAGE_FS or GFX_STAGE_CS

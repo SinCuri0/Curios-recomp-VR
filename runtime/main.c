@@ -153,7 +153,64 @@ const RtConfig *rt_config(void) { return &cfg; }
 
 // ---- runtime services the generated code calls (cpu.h)
 volatile int g_fnprof = 0;
-void fnprof_hit(uint64_t addr, uint64_t lr, uint64_t x0) { (void)addr, (void)lr, (void)x0; }
+// LOCAL TEST (Ocarina): OOT_LEAF_WATCH=1: the particle emitter's GPU-calculation function (main+0x1240fc0) and the
+// dispatch it ends in (main+0x129d7f0, called from main+0x12412cc). Logs the emitter's step at +0xdc (the function
+// returns at once when it is <= 0) and its mask at +0x98, and every 600 entries how often the dispatch was reached.
+static uint64_t lw_calls, lw_step_le0, lw_disp;
+// Per emitter (first 512 seen): entries, entries with step <= 0, dispatches reached. The dispatch is counted for the
+// emitter whose entry this thread saw last.
+enum { LW_N = 512 };
+static struct { uint64_t emitter; uint32_t calls, le0, disp; } lw_tab[LW_N];
+static int lw_n;
+static _Thread_local int lw_cur = -1;
+static PlatMutex lw_lock = PLAT_MUTEX_INIT;
+static void lw_report(void) {
+    int never = 0, some = 0;
+    for (int i = 0; i < lw_n; i++) { if (lw_tab[i].disp) some++; else never++; }
+    rt_log("leafwatch: emitters %d: dispatched %d, never dispatched %d", lw_n, some, never);
+    for (int i = 0, shown = 0; i < lw_n && shown < 24; i++) {
+        if (lw_tab[i].disp || lw_tab[i].calls < 30) continue;
+        shown++;
+        const uint64_t *w = (const uint64_t *)(uintptr_t)lw_tab[i].emitter;
+        rt_log("leafwatch:  never: emitter %#llx calls %u step<=0 %u; +0x88 %#llx +0x90 %#llx +0x98 %#llx", (unsigned long long)lw_tab[i].emitter,
+               lw_tab[i].calls, lw_tab[i].le0, (unsigned long long)w[0x88 / 8], (unsigned long long)w[0x90 / 8], (unsigned long long)w[0x98 / 8]);
+    }
+}
+void fnprof_hit(uint64_t addr, uint64_t lr, uint64_t x0) {
+    if (addr == 0x700129d7f0ull && lr == 0x70012412d0ull) {
+        __atomic_add_fetch(&lw_disp, 1, __ATOMIC_RELAXED);
+        if (lw_cur >= 0) __atomic_add_fetch(&lw_tab[lw_cur].disp, 1, __ATOMIC_RELAXED);
+        return;
+    }
+    if (addr != 0x7001240fc0ull) return;
+    {
+        plat_mutex_lock(&lw_lock);
+        int i = 0;
+        while (i < lw_n && lw_tab[i].emitter != x0) i++;
+        if (i == lw_n && lw_n < LW_N) lw_tab[lw_n++].emitter = x0;
+        lw_cur = i < lw_n ? i : -1;
+        if (lw_cur >= 0) lw_tab[i].calls++;
+        plat_mutex_unlock(&lw_lock);
+    }
+    float step;
+    uint64_t mask;
+    memcpy(&step, (const void *)(uintptr_t)(x0 + 0xdc), 4);
+    memcpy(&mask, (const void *)(uintptr_t)(x0 + 0x98), 8);
+    uint64_t n = __atomic_add_fetch(&lw_calls, 1, __ATOMIC_RELAXED);
+    if (!(step > 0)) {
+        __atomic_add_fetch(&lw_step_le0, 1, __ATOMIC_RELAXED);
+        if (lw_cur >= 0) __atomic_add_fetch(&lw_tab[lw_cur].le0, 1, __ATOMIC_RELAXED);
+    }
+    if (n % 6000 == 0) { plat_mutex_lock(&lw_lock); lw_report(); plat_mutex_unlock(&lw_lock); }
+    if (n <= 20) rt_log("leafwatch: emitter %#llx lr %#llx step %g mask %#llx", (unsigned long long)x0, (unsigned long long)lr, step, (unsigned long long)mask);
+    if (n % 600 == 0)
+        rt_log("leafwatch: %llu calls, step <= 0 in %llu, dispatches %llu; last emitter %#llx step %g mask %#llx", (unsigned long long)n,
+               (unsigned long long)lw_step_le0, (unsigned long long)lw_disp, (unsigned long long)x0, step, (unsigned long long)mask);
+}
+__attribute__((constructor)) static void leaf_watch_init(void) {
+    const char *e = getenv("OOT_LEAF_WATCH");
+    if (e && *e == '1') g_fnprof = 1;
+}
 
 void rt_brk(Cpu *c, uint32_t imm, uint64_t pc) {
     char at[128], lr[128];

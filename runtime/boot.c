@@ -260,7 +260,12 @@ static void series_shot(const tex_t *t, uint64_t n) {
         if (hi) plat_file_mkdir_p(dir);
         parsed = 1;
     }
-    if (world) {   // the first present at or after each step of the world clock
+    extern long vk_capture_frame;
+    static uint64_t f10_from;   // LOCAL TEST (Ocarina): F10 saves the next 120 presents at half size in f10-shots
+    if (!f10_from && __atomic_load_n(&vk_capture_frame, __ATOMIC_ACQUIRE) >= 0) f10_from = n + 1, plat_file_mkdir_p("f10-shots");
+    const int f10 = f10_from && n >= f10_from && n < f10_from + 120;
+    if (f10) {
+    } else if (world) {   // the first present at or after each step of the world clock
         int64_t w = frame_step_world_us();
         if (w < 0 || (unsigned long long)w < next || next > hi) return;
         while (next <= (unsigned long long)w) next += step;
@@ -270,7 +275,7 @@ static void series_shot(const tex_t *t, uint64_t n) {
     int fmt = t->d.format;
     int bgra = fmt == NVN_FORMAT_BGRA8 || fmt == NVN_FORMAT_BGRA8_SRGB;
     if (!bgra && fmt != NVN_FORMAT_RGBA8 && fmt != NVN_FORMAT_RGBA8_SRGB) return;
-    uint32_t w = t->d.width, h = t->d.height, ow = full ? w : 480, oh = full ? h : 270;
+    uint32_t w = t->d.width, h = t->d.height, ow = f10 ? w / 2 : full ? w : 480, oh = f10 ? h / 2 : full ? h : 270;
     uint8_t *px = malloc(4ull * w * h), *out = malloc(4ull * ow * oh);
     if (!px || !out) rt_fatal("boot: out of memory for a TOTK_SHOTS frame");
     view_t view;
@@ -292,8 +297,9 @@ static void series_shot(const tex_t *t, uint64_t n) {
             o[3] = 255;
         }
     char path[PLAT_PATH_MAX];
-    snprintf(path, sizeof path, "%s/f%05llu.png", dir, (unsigned long long)n);
+    snprintf(path, sizeof path, "%s/f%05llu.png", f10 ? "f10-shots" : dir, (unsigned long long)n);
     rt_write_png(path, out, ow, oh);
+    if (f10 && n == f10_from + 119) rt_log("boot: F10 saved presents %llu to %llu in f10-shots", (unsigned long long)f10_from, (unsigned long long)n);
     free(out);
     free(px);
 }

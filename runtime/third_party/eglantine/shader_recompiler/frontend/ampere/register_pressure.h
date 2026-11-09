@@ -1,7 +1,9 @@
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
+#include <algorithm>
 #include <array>
+#include <bit>
 #include <vector>
 #include "shader_recompiler/frontend/ampere/instruction.h"
 
@@ -52,7 +54,13 @@ inline RegisterPressure PrepareRegisterPressure(const Instruction& input, u32 re
         break;
     case 0x807:
     case 0x808:
-    case 0x809:   // FMNMX with an immediate B: dest and A only
+    case 0x809: // FMNMX, immediate b
+    case 0xa07: // SEL, FSEL, FMNMX with a constant-buffer or uniform b: no register in B's field
+    case 0xa08:
+    case 0xa09:
+    case 0xc07:
+    case 0xc08:
+    case 0xc09:
     case 0x923:
     case 0x820:
     case 0xa20:

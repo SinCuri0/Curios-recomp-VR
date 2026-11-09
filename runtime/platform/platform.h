@@ -198,6 +198,9 @@ uint64_t plat_mem_written(uint64_t addr, uint64_t n, uint64_t *pages, uint64_t m
 // A write that faulted on a read-only page at addr goes to fn first; fn returns 1 when it made the page writable and
 // the write should run again, 0 to let the fault go on (to the crash handler). One hook per process.
 void plat_mem_fault_hook(int (*fn)(uint64_t addr));
+// LOCAL TEST (Ocarina): guard-page watch over [addr, addr+size) (Windows only), and its per-instruction counts.
+int plat_guard_watch(uint64_t addr, uint64_t size, uint64_t stride, long budget);
+void plat_guard_report(void (*out)(uint64_t rva, int write, uint32_t field, uint32_t n));
 // Starts this program again with the same arguments and ends this process with the new one's exit code (Windows), or
 // replaces this process with it (Linux). Environment changes made before the call are passed on.
 _Noreturn void plat_reexec(void);

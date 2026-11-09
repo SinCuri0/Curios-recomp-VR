@@ -562,6 +562,64 @@ void plat_mem_fault_hook(int (*fn)(uint64_t addr)) {
     AddVectoredExceptionHandler(1, fault_veh);
 }
 
+// LOCAL TEST (Ocarina): a guard-page watch over one range. Every access traps; the instruction is single-stepped and the
+// page guarded again, so all accesses are seen. Counted per (image offset of the instruction, read/write, offset in the
+// range modulo `stride`), up to GW_N entries; plat_guard_report prints them. Off once `budget` traps were taken.
+enum { GW_N = 256 };
+static struct { uint64_t rva; uint32_t field; int write; uint32_t n; } gw_tab[GW_N];
+static volatile LONG gw_count, gw_budget;
+static uint64_t gw_lo, gw_hi, gw_stride;
+static uintptr_t gw_base, gw_size;
+static __thread uint64_t gw_rearm;   // the page this thread single-steps over
+static SRWLOCK gw_lock = SRWLOCK_INIT;
+
+static LONG CALLBACK guard_veh(EXCEPTION_POINTERS *ep) {
+    const EXCEPTION_RECORD *er = ep->ExceptionRecord;
+    if (er->ExceptionCode == EXCEPTION_SINGLE_STEP && gw_rearm) {
+        DWORD old;
+        if (gw_count < gw_budget) VirtualProtect((void *)(uintptr_t)gw_rearm, 4096, PAGE_READWRITE | PAGE_GUARD, &old);
+        gw_rearm = 0;
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
+    if (er->ExceptionCode != STATUS_GUARD_PAGE_VIOLATION || er->NumberParameters < 2) return EXCEPTION_CONTINUE_SEARCH;
+    uint64_t a = (uint64_t)er->ExceptionInformation[1];
+    if (a < (gw_lo & ~4095ull) || a >= ((gw_hi + 4095) & ~4095ull)) return EXCEPTION_CONTINUE_SEARCH;   // whole guarded pages
+    InterlockedIncrement(&gw_count);
+    uintptr_t rip = (uintptr_t)ep->ContextRecord->Rip;
+    uint64_t rva = rip - gw_base < gw_size ? rip - gw_base : rip | (1ull << 63);
+    int write = er->ExceptionInformation[0] == 1;
+    uint32_t field = a >= gw_lo && a < gw_hi && gw_stride ? (uint32_t)((a - gw_lo) % gw_stride) : 0xffffffffu;
+    AcquireSRWLockExclusive(&gw_lock);
+    int i = 0;
+    while (i < GW_N && gw_tab[i].n && !(gw_tab[i].rva == rva && gw_tab[i].write == write && gw_tab[i].field == field)) i++;
+    if (i < GW_N) gw_tab[i].rva = rva, gw_tab[i].write = write, gw_tab[i].field = field, gw_tab[i].n++;
+    ReleaseSRWLockExclusive(&gw_lock);
+    gw_rearm = a & ~4095ull;
+    ep->ContextRecord->EFlags |= 0x100;   // trap after this instruction, then guard the page again
+    return EXCEPTION_CONTINUE_EXECUTION;
+}
+
+int plat_guard_watch(uint64_t addr, uint64_t size, uint64_t stride, long budget) {
+    static int added;
+    if (!added) {
+        MODULEINFO mi;
+        if (GetModuleInformation(GetCurrentProcess(), GetModuleHandleW(NULL), &mi, sizeof mi))
+            gw_base = (uintptr_t)mi.lpBaseOfDll, gw_size = mi.SizeOfImage;
+        AddVectoredExceptionHandler(1, guard_veh);
+        added = 1;
+    }
+    gw_lo = addr, gw_hi = addr + size, gw_stride = stride, gw_budget = budget;
+    DWORD old;
+    return VirtualProtect((void *)(uintptr_t)(addr & ~4095ull), (SIZE_T)((addr + size + 4095) & ~4095ull) - (addr & ~4095ull),
+                          PAGE_READWRITE | PAGE_GUARD, &old) != 0;
+}
+
+void plat_guard_report(void (*out)(uint64_t rva, int write, uint32_t field, uint32_t n)) {
+    AcquireSRWLockShared(&gw_lock);
+    for (int i = 0; i < GW_N && gw_tab[i].n; i++) out(gw_tab[i].rva, gw_tab[i].write, gw_tab[i].field, gw_tab[i].n);
+    ReleaseSRWLockShared(&gw_lock);
+}
+
 static void (*crash_fn)(const PlatCrash *c);
 
 static LONG CALLBACK crash_veh(EXCEPTION_POINTERS *ep) {

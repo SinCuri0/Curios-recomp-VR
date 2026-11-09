@@ -77,7 +77,7 @@ inline LoweredProgram LowerToMaxwellWith(std::span<const Instruction> code, u32 
         uses_uniform_bank |= op == 0x987 ||
             ((op == 0x387 || op == 0x983) && instruction.Bits(91, 1));
         uses_uniform_bank |= op == 0x3c4 || op == 0x2bd || op == 0x896 || op == 0xf60 || op == 0xc11 || op == 0xd08 || op == 0xc0c || op == 0x986 || op == 0x9a8 || op == 0xc12 || op == 0xc17 || op == 0xe24 || op == 0xc24 || op == 0xd00 || op == 0xd09 || op == 0x9c3 || op == 0xc45 || op == 0x2a4 || op == 0x891 || op == 0x890 || op == 0x290 || op == 0x28c || op == 0x88c || op == 0x287 || op == 0x887 || op == 0x958 || op == 0xab9 || op == 0xabb || op == 0x899 || op == 0xc20 || op == 0xe21 || op == 0xe23 || op == 0xc02 ||
-                             op == 0x886 || op == 0x3c2 || op == 0xc82 || op == 0x882 || op == 0x292 || op == 0x892 || op == 0x291 || op == 0x981 || op == 0xc13 || op == 0xc10 || op == 0xc23 || op == 0x526 || op == 0x2be || op == 0x8a4 || op == 0xd05 || (op == 0x984 && instruction.Bits(91, 1)) || (op == 0x988 && instruction.Bits(91, 1)) || op == 0x89c || op == 0x883 || op == 0x2a5 || op == 0xd06 || op == 0xf63 || op == 0xf66 || op == 0xf69 || op == 0xc0b || op == 0x8a5 || op == 0x299 || op == 0xc09 || op == 0xc07 || (op == 0x81c && instruction.Bits(67, 1)) || op == 0xc0a ||
+                             op == 0x886 || op == 0x3c2 || op == 0xc82 || op == 0x882 || op == 0x292 || op == 0x892 || op == 0x291 || op == 0x981 || op == 0xc13 || op == 0xc10 || op == 0xc23 || op == 0x526 || op == 0x2be || op == 0x8a4 || op == 0xd05 || (op == 0x984 && instruction.Bits(91, 1)) || (op == 0x988 && instruction.Bits(91, 1)) || op == 0x89c || op == 0x883 || op == 0x2a5 || op == 0xd06 || op == 0xf63 || op == 0xf66 || op == 0xf69 || op == 0xc0b || op == 0x8a5 || op == 0x299 || op == 0xc09 || op == 0xc07 || op == 0xc08 || (op == 0x81c && instruction.Bits(67, 1)) || op == 0xc0a ||
                              (op == 0x83b && instruction.Bits(91, 1));
     }
     const auto address_of = [](u32 index) { return 0x50U + index * 8 + ((index + 1) / 3) * 8; };
@@ -305,6 +305,9 @@ inline LoweredProgram LowerToMaxwellWith(std::span<const Instruction> code, u32 
         bool requires_shadow = false;
         for (u32 bit : {16U, 24U, 32U, 64U}) {
             if (opcode == 0x81c) break;
+            // Bits 32-39 name a register in register forms and in these opcodes: TEX/TLD, TXD's
+            // gradients, and the data operand of the stores, ISBEWR (0x927), the global atomic
+            // (0x9a8), RED (0x98e) and SURED (0x59f), all listed with operand 32 in RegisterPressure.
             if (bit == 32 && insn.Bits(9, 3) != 1 && opcode != 0xb60 && opcode != 0xb66 && opcode != 0xb6c && opcode != 0xf6c && opcode != 0x986 && opcode != 0x987 && opcode != 0xf66 && opcode != 0x988 && opcode != 0x927 && opcode != 0x9a8 && opcode != 0x98e && opcode != 0x59f) continue;
             const u32 reg = insn.Bits(bit, 8);
             if (reg >= (uses_uniform_bank ? high_uniform_base : 246U) && reg < 255)
@@ -2149,8 +2152,8 @@ inline LoweredProgram LowerToMaxwellWith(std::span<const Instruction> code, u32 
             const bool half = signed_half || (opcode == 0x305 && (mode & ~0x100U) == 0x0010f000);
             const bool small = (mode & ~0xc000U) == 0x00212800;
             const bool short_trunc = opcode == 0x305 && (mode & ~0x100U) == 0x0021e800;
-            const bool absolute = opcode == 0x305 && !half && insn.Bits(62, 1);
-            const bool negate = opcode == 0x305 && !half && insn.Bits(63, 1);
+            const bool absolute = opcode != 0xd05 && !half && insn.Bits(62, 1);
+            const bool negate = opcode != 0xd05 && !half && insn.Bits(63, 1);
             const bool byte = (mode & ~0x10100U) == 0x0020e000;
             const bool word = (mode & ~0x1c100U) == 0x00203000;
             const bool extended_word =
@@ -2159,9 +2162,7 @@ inline LoweredProgram LowerToMaxwellWith(std::span<const Instruction> code, u32 
                 (signed_half && (insn.Bits(24, 8) || (insn.words[3] & 0xc00001ffU))) ||
                 ((byte || small || short_trunc || extended_word) &&
                  (insn.Bits(24, 8) || (insn.words[3] & 0xc00001ffU) ||
-                  (opcode == 0xb05 &&
-                   (insn.Bits(63, 1) || (!small && insn.Bits(62, 1)) ||
-                    (small && insn.Bits(59, 3)))) ||
+                  (opcode == 0xb05 && small && insn.Bits(59, 3)) ||
                   insn.Bits(91, 1) != static_cast<u32>(opcode == 0xd05))) ||
                 (opcode != 0xb05 && (insn.words[1] & ~(half ? 0x100000ffU :
                     0xffU | (absolute ? 0x40000000U : 0U) | (negate ? 0x80000000U : 0U)))) ||
@@ -2169,13 +2170,14 @@ inline LoweredProgram LowerToMaxwellWith(std::span<const Instruction> code, u32 
                 return fail(index, "native float-to-integer conversion mode");
             }
             const bool is_signed = insn.Bits(72, 1);
-            u32 source = opcode == 0xb05 ? materialize(2, 0, 252, small && insn.Bits(62, 1), false)
+            u32 source = opcode == 0xb05 ? materialize(2, 0, 252, absolute, negate)
                        : opcode == 0xd05 ? uniform_register(insn.Bits(32, 8)) : insn.Bits(32, 8);
             if (half) {
                 extract_half({source, insn.Bits(60, 1) ? 3U : 2U, false, false}, 0, 252);
                 source = 252;
             }
-            if (absolute || negate) source = materialize(0, source, 249, absolute, negate);
+            if (opcode == 0x305 && (absolute || negate))
+                source = materialize(0, source, 249, absolute, negate);
             if (signed_half) {
                 mov_imm(253, 0x47800000);
                 emit(0x5800000000000000ULL | predicate | 250 | (u64{252} << 8) |
@@ -3283,7 +3285,7 @@ inline LoweredProgram LowerToMaxwellWith(std::span<const Instruction> code, u32 
             break;
         }
         case 0x207: case 0x807: case 0xa07: case 0xc07:
-        case 0x208: case 0x808: case 0xa08: case 0xc08: { // Bitwise SEL / FSEL
+        case 0x208: case 0x808: case 0xa08: case 0xc08: { // Bitwise SEL / FSEL (0xc07, 0xc08: uniform b)
             // FSEL applies the floating operand modifiers (negate/absolute) before selecting.
             const bool floating = (opcode & 0x1ff) == 0x008;
             const u32 a = operand(0, floating), b = operand(1, floating);
@@ -4010,6 +4012,12 @@ inline LoweredProgram LowerToMaxwell(std::span<const Instruction> code,
     u32 high_uniforms = 0;
     for (;;) {
         LoweredProgram lowered = LowerToMaxwellWith(code, high_uniforms, options);
+        // Shadowing borrows aligned quartets below the mirrors: their base must be 4-aligned.
+        if (!lowered && lowered.error == "native program uses lowering scratch registers" &&
+            (high_uniforms & 3) != 0) {
+            high_uniforms = (high_uniforms + 3) & ~3U;
+            continue;
+        }
         if (lowered || lowered.high_uniform_registers <= high_uniforms) return lowered;
         high_uniforms = lowered.high_uniform_registers;
     }

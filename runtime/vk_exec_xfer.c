@@ -272,7 +272,16 @@ static void oq_segment(VkExec *ex, uint64_t addr, int reset) {
     vk_completion_add(ex->fence, oq_cb, s);
 }
 
+// LOCAL TEST (Ocarina): the first reset and report of each counter type, with the address of the first report.
+static void counter_seen(const char *what, uint32_t type, uint64_t addr) {
+    static volatile uint8_t seen[2][32];
+    const int r = what[1] == 'e' && what[2] == 'p';   // "report"
+    if (type < 32 && !__atomic_exchange_n(&seen[r][type], 1, __ATOMIC_RELAXED))
+        rt_log("vk: counter %s of type %#x (first one%s%llx)", what, type, addr ? " at " : "", (unsigned long long)addr);
+}
+
 static void reset_counter(VkExec *ex, const p_reset_counter *p) {
+    counter_seen("reset", p->type, 0);
     if (p->type == NVN_COUNTER_TYPE_SAMPLES_PASSED) oq_fake_drew = 0, fake_samples = 0;
     if (p->type != NVN_COUNTER_TYPE_SAMPLES_PASSED || !oq_ready()) return;
     oq_segment(ex, 0, 1);
@@ -301,6 +310,7 @@ static void signal_event(VkExec *ex, const p_signal_event *p) {
 static void report_counter(VkExec *ex, const p_report_counter *p) {
     static int fake = -1;   // LOCAL TEST (Ocarina): OOT_OQ_FAKE=1: every samples-passed report says "visible" at once
     if (fake < 0) fake = getenv("OOT_OQ_FAKE") != NULL;
+    counter_seen("report", p->type, p->addr);
     if (fake && p->type == NVN_COUNTER_TYPE_SAMPLES_PASSED) {
         // A draw since the reset passed everything; none passed nothing (reports used as a zero reference stay 0). It also
         // grows across reports, for games taking end - begin.

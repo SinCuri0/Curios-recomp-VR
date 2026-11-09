@@ -198,7 +198,7 @@ run "$PY" tools/build_xlate.py
 # ---------------------------------------------------------------- 4. Lift
 etapa 4 "$(L 'Converter o código do jogo' 'Convert the game code')" \
     "$(L 'Traduz o código do jogo para C em generated/oot111.' 'Translates the game code to C in generated/oot111.')"
-run "$PY" recomp/gen.py --exefs build/exefs --out generated/oot111 --modules main,sdk,subsdk0
+run "$PY" recomp/gen.py --exefs build/exefs --out generated/oot111 --modules main,sdk,subsdk0 --patches recomp/patches-oot111.txt
 run "$PY" tools/oot/patch_generated.py generated/oot111
 
 # ---------------------------------------------------------------- 5. RomFS

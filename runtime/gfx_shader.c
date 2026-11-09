@@ -111,6 +111,8 @@ struct GfxShader {
     int has_c0;
     int is_mesh;                                           // LOCAL TEST (Ocarina): a MeshEXT module in the vertex slot
     int is_task;                                           // LOCAL TEST (Ocarina): a TaskEXT module
+    GfxPtrHint hints[16];                                  // LOCAL TEST (Ocarina): "ptrhint" notes (translator patch 0041)
+    int nhints;
 };
 
 static PlatMutex cache_lock = PLAT_MUTEX_INIT;                  // memory cache
@@ -1202,6 +1204,17 @@ static int reflect(GfxShader *s, int flags) {
         }
         if (!nvn2_c0_valid(&s->c0, NVN2_C0_LIST)) return 0;   // the same bound the dispatch packs against, so a bad layout fails here
         s->has_c0 = 1;
+    }
+    // LOCAL TEST (Ocarina): translator patch 0041's "ptrhint" notes, the exact pointers of guarded accesses (Fritchii's forms).
+    for (const char *p = js; s->nhints < (int)(sizeof s->hints / sizeof s->hints[0]) && (p = strstr(p, "\"ptrhint ")); p += 9) {
+        char kind;
+        unsigned slot, a, b;
+        if (sscanf(p + 9, "%c %u %u %u", &kind, &slot, &a, &b) != 4 || (kind != 'i' && kind != 'a') || slot > 17) continue;
+        GfxPtrHint h = {(uint8_t)kind, (uint8_t)slot, a, b};
+        int dup = 0;
+        for (int i = 0; i < s->nhints && !dup; i++)
+            dup = s->hints[i].kind == h.kind && s->hints[i].slot == h.slot && s->hints[i].a == h.a && s->hints[i].b == h.b;
+        if (!dup) s->hints[s->nhints++] = h;
     }
     if (require_c0 && !s->has_c0) {
         rt_log("gfx_shader: translator omitted the NVN 2 root layout; rebuild the shader translator");
@@ -2447,6 +2460,7 @@ uint32_t gfx_shader_outputs(const GfxShader *s, GfxShaderIo io[32]) {
 uint32_t gfx_shader_output_comps(const GfxShader *s, int loc) { return loc >= 0 && loc < 32 ? s->out_comps[loc] : 0xf; }
 int gfx_shader_is_mesh(const GfxShader *s) { return s->is_mesh; }
 int gfx_shader_is_task(const GfxShader *s) { return s->is_task; }
+int gfx_shader_ptr_hints(const GfxShader *s, const GfxPtrHint **hints) { *hints = s->hints; return s->nhints; }
 void gfx_shader_local_size(const GfxShader *s, uint32_t local[3]) { memcpy(local, s->local, sizeof s->local); }
 
 // ---- answers met in play
