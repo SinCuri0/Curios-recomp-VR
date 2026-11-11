@@ -43,6 +43,8 @@ This fork ([SinCuri0/Curios-recomp-VR](https://github.com/SinCuri0/Curios-recomp
 - The HUD and the menus are not placed for VR.
 - Videos are not shown on the fixed screen yet.
 
+Every game address, offset and unit the VR mode uses is in [docs/vr-port-notes.md](docs/vr-port-notes.md).
+
 **Settings** (in `totk.ini`, or as an environment variable with the `TOTK_` prefix, for example `TOTK_VR=1`):
 
 | Key | Values |

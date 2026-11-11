@@ -29,7 +29,7 @@ site occlusion main 11b82f4 39400008 2a1f03e8
 set vrcam TOTK_VR_CAMERA 0
 site vrcam main 33a428 b940100a b940100a aa1e03f0 952d9ae2  # ldr w10, [x0, #0x10]; mov x16, x30; bl page+0xfb0
 # The camera controller's update (main+0x4c48c0, x0 the controller: float eye at +0xd8, float look-at point at +0x100)
-# tells the host function at page+0xfa0 (runtime/vr_camera.c) where it is. The first-person view starts at the look-at point.
+# tells the host function at page+0xfa0 (runtime/vr_camera.c) where it is. First person looks along eye to look-at.
 site vrcam main 4c48f4 aa0003f3 aa0003f3 aa1e03f0 952771ab  # mov x19, x0; mov x16, x30; bl page+0xfa0
 # The camera target's update (main+0x32a4c40) resolves the actor the camera follows (Link) into x0 at main+0x32a4de4; the host
 # function at page+0xf90 (runtime/vr_camera.c) keeps it. Its position is at +0x31c.
@@ -38,5 +38,5 @@ site vrcam main 32a4de4 aa0003f5 aa0003f5 aa1e03f0 946ff06b  # mov x21, x0; mov 
 # world matrices after the physics ran. The host function at page+0xf80 (runtime/vr_camera.c) shrinks Link's head there first.
 site vrcam main 14e0220 aa0003f3 aa0003f3 aa1e03f0 94e70358  # mov x19, x0; mov x16, x30; bl page+0xf80
 # A cutscene camera track's update (main+0xe7a220, it reads CameraPos / CameraAt / CameraUp) tells the host function at
-# page+0xf70 (runtime/vr_camera.c) that a cutscene camera runs.
+# page+0xf70 (runtime/vr_camera.c) that a cutscene camera runs. It runs only on area entry, not in talks (docs/vr-port-notes.md).
 site vrcam main e7a248 aa0003f3 aa0003f3 aa1e03f0 95009b4a  # mov x19, x0; mov x16, x30; bl page+0xf70
