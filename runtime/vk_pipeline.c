@@ -1241,6 +1241,7 @@ static void pin_subgroup32(VkPipelineShaderStageCreateInfo *st, VkPipelineShader
 }
 
 static int spirv_is_mesh(const uint32_t *w, uint64_t n);
+static uint32_t *spirv_mesh_drop_wg_init(const uint32_t *w, uint64_t n, uint64_t *out_n);
 static uint64_t spv_fnv(const uint32_t *w, uint64_t words) {
     uint64_t h = 0xcbf29ce484222325ull;
     const uint8_t *b = (const uint8_t *)w;
@@ -1299,6 +1300,87 @@ static uint32_t *spirv_nan_minmax(const uint32_t *w, uint64_t n) {
     return o;
 }
 
+// Intel and AMD: every GLSL.std.450 Sqrt(x) becomes Sqrt(NMax(x, 0)). NVIDIA keeps an FMA single-rounded, so a value the
+// console computes as exactly 0 can come out slightly negative elsewhere, and its Sqrt is NaN: the HDR encode compute (prog 102)
+// then draws black leaves and silhouettes (issue #49). NMax also turns a NaN operand into 0. A copy of the module with a new
+// bound, or NULL when there is no Sqrt. Every stage on GPUs other than NVIDIA (the driver rebuilds each changed pipeline
+// once); NVIDIA keeps its modules and its cache. OOT_SQRT_CLAMP=0 turns it off, =1 limits it to compute shaders, =2 every stage.
+static uint32_t *spirv_sqrt_clamp(const uint32_t *w, uint64_t n, uint64_t *out_n) {
+    static int on = -1;
+    if (on < 0) {
+        const char *e = getenv("OOT_SQRT_CLAMP");
+        // every stage: Link came out black from a vertex/fragment Sqrt on Intel
+        on = e && *e ? atoi(e) : vk_ctx()->props.vendorID == 0x10de ? 0 : 2;
+    }
+    if (!on || !w || n < 5) return NULL;
+    if (on == 1) {   // only a module whose entry point is GLCompute
+        int compute = 0;
+        for (uint64_t i = 5; i < n && w[i] >> 16; i += w[i] >> 16)
+            if ((w[i] & 0xffff) == 15) { compute = w[i + 1] == 5; break; }
+            else if ((w[i] & 0xffff) == 54) break;
+        if (!compute) return NULL;
+    }
+    enum { MAXT = 64 };
+    uint32_t glsl = 0, floats[MAXT], nf = 0, types[MAXT], zeros[MAXT], nt = 0, nsqrt = 0;
+    uint64_t first_fn = 0;
+    for (uint64_t i = 5; i < n && w[i] >> 16;) {
+        uint32_t op = w[i] & 0xffff, len = w[i] >> 16;
+        if (i + len > n) return NULL;
+        if (op == 11 && len >= 3 && !memcmp(&w[i + 2], "GLSL.std.450", 12)) glsl = w[i + 1];
+        else if (op == 22 && nf < MAXT) floats[nf++] = w[i + 1];                       // OpTypeFloat
+        else if (op == 23 && nf < MAXT) {                                               // OpTypeVector of a float
+            for (uint32_t k = 0; k < nf; k++)
+                if (floats[k] == w[i + 2]) { floats[nf++] = w[i + 1]; break; }
+        } else if (op == 54 && !first_fn) first_fn = i;                                 // OpFunction
+        else if (op == 12 && len >= 6 && glsl && w[i + 3] == glsl && w[i + 4] == 31) {  // OpExtInst Sqrt
+            int is_float = 0, known = 0;
+            for (uint32_t k = 0; k < nf; k++) is_float |= floats[k] == w[i + 1];
+            for (uint32_t k = 0; k < nt; k++) known |= types[k] == w[i + 1];
+            if (!is_float) continue;
+            if (!known) {
+                if (nt == MAXT) return NULL;
+                types[nt++] = w[i + 1];
+            }
+            nsqrt++;
+        }
+        i += len;
+    }
+    if (!nsqrt || !first_fn) return NULL;
+    uint64_t total = n + 3ull * nt + 7ull * nsqrt;
+    uint32_t *o = malloc((size_t)total * 4);
+    if (!o) rt_fatal("vk_pipeline: out of memory");
+    uint32_t bound = w[3];
+    for (uint32_t k = 0; k < nt; k++) zeros[k] = bound++;
+    uint64_t j = 0;
+    memcpy(o, w, 5 * 4);
+    j = 5;
+    for (uint64_t i = 5; i < n && w[i] >> 16;) {
+        uint32_t op = w[i] & 0xffff, len = w[i] >> 16;
+        if (i == first_fn)
+            for (uint32_t k = 0; k < nt; k++) o[j++] = (3u << 16) | 46, o[j++] = types[k], o[j++] = zeros[k];   // OpConstantNull
+        int clamp = 0;
+        uint32_t z = 0;
+        if (op == 12 && len >= 6 && w[i + 3] == glsl && w[i + 4] == 31)
+            for (uint32_t k = 0; k < nt; k++)
+                if (types[k] == w[i + 1]) clamp = 1, z = zeros[k];
+        if (clamp) {   // %t = NMax %x %zero, then the Sqrt reads %t
+            uint32_t t = bound++;
+            o[j++] = (7u << 16) | 12, o[j++] = w[i + 1], o[j++] = t, o[j++] = glsl, o[j++] = 80, o[j++] = w[i + 5], o[j++] = z;
+            memcpy(&o[j], &w[i], (size_t)len * 4);
+            o[j + 5] = t;
+            j += len;
+        } else {
+            memcpy(&o[j], &w[i], (size_t)len * 4);
+            j += len;
+        }
+        i += len;
+    }
+    o[3] = bound;
+    *out_n = j;
+    return o;
+}
+
+
 static const uint32_t *fs_spirv_over(const GfxShader *fs, uint64_t *words) {   // the override is kept: a few shaders
     const uint32_t *w = gfx_shader_spirv(fs, words);
     uint64_t n = 0;
@@ -1313,13 +1395,21 @@ static VkShaderModule make_module_linked(const uint32_t *w, uint64_t words, int 
     if (over) w = over, words = over_n;
     uint32_t *minmax = spirv_nan_minmax(w, words);
     if (minmax) w = minmax;
+    uint64_t sqrt_n = 0;
+    uint32_t *sqrtc = spirv_sqrt_clamp(w, words, &sqrt_n);
+    if (sqrtc) w = sqrtc, words = sqrt_n;
     uint64_t fixed_n = 0;
     uint32_t *fixed = spirv_is_mesh(w, words) ? NULL : geometry_chain ? spirv_fixup_linked(w, words, &fixed_n, 1) : spirv_fixup(w, words, &fixed_n);
     if (fixed) w = fixed, words = fixed_n;
+    uint64_t wg_n = 0;
+    uint32_t *wgfree = spirv_mesh_drop_wg_init(w, words, &wg_n);
+    if (wgfree) w = wgfree, words = wg_n;
     VkShaderModuleCreateInfo ci = {.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO, .codeSize = (size_t)words * 4, .pCode = w};
     VkShaderModule m = VK_NULL_HANDLE;
     VkResult r = vkCreateShaderModule(P.device, &ci, NULL, &m);
+    free(wgfree);
     free(fixed);
+    free(sqrtc);
     free(minmax);
     free(over);
     return r == VK_SUCCESS ? m : VK_NULL_HANDLE;
@@ -1769,6 +1859,42 @@ static VkDescriptorType descriptor_type(int kind, const GfxShaderRes *r) {
 
 static int mesh_vs(const VkPipeState *s) { return s->vs && gfx_shader_is_mesh(s->vs); }   // LOCAL TEST (Ocarina)
 // The first entry point of a module is MeshEXT: it takes no vertex stage fixups.
+// Translator patch 0042 (v0.3.3) gives Workgroup variables an OpConstantNull initializer (local memory reads as zero on the
+// Switch). AMD's compiler (LLPC, Adrenalin 26.10.1, RX 7800 XT) rejects it in a mesh or task stage: outside the game mesh
+// 535134dde83aef18 (u32[965] in Workgroup) fails with VK_ERROR_INITIALIZATION_FAILED, and in the game the build never
+// returns, so the boot prewarm froze at 596 of 598 pipelines (#208). On AMD those modules lose the Workgroup
+// initializers, as before 0.3.3. OOT_MESH_WG_INIT=1 keeps them. NULL: nothing to drop. From #208 (Lu33Y-No-Git).
+static uint32_t *spirv_mesh_drop_wg_init(const uint32_t *w, uint64_t n, uint64_t *out_n) {
+    static int keep = -1;
+    if (keep < 0) { const char *e = getenv("OOT_MESH_WG_INIT"); keep = e && *e ? *e != '0' : !vk_caps.amd; }
+    if (keep || n < 5) return NULL;
+    int mesh = 0, found = 0;
+    for (uint64_t i = 5; i < n && w[i] >> 16; i += w[i] >> 16) {
+        uint32_t op = w[i] & 0xffff, len = w[i] >> 16;
+        if (op == 15 && i + 1 < n && (w[i + 1] == 5365 || w[i + 1] == 5364)) mesh = 1;   // MeshEXT, TaskEXT
+        if (op == 59 && len == 5 && i + 3 < n && w[i + 3] == 4) found++;   // OpVariable ... Workgroup <initializer>
+    }
+    if (!mesh || !found) return NULL;
+    uint32_t *o = malloc((size_t)n * 4);
+    if (!o) rt_fatal("vk_pipeline: out of memory");
+    memcpy(o, w, 20);
+    uint64_t k = 5;
+    for (uint64_t i = 5; i < n && w[i] >> 16; i += w[i] >> 16) {
+        uint32_t op = w[i] & 0xffff, len = w[i] >> 16;
+        if (i + len > n) { free(o); return NULL; }
+        if (op == 59 && len == 5 && w[i + 3] == 4) {   // the same OpVariable without its initializer
+            o[k++] = 4u << 16 | 59;
+            o[k++] = w[i + 1], o[k++] = w[i + 2], o[k++] = w[i + 3];
+            continue;
+        }
+        memcpy(o + k, w + i, (size_t)len * 4);
+        k += len;
+    }
+    LOG_ONCE("vk_pipeline: mesh and task modules lose their Workgroup initializers on AMD (OOT_MESH_WG_INIT=1 keeps them)");
+    *out_n = k;
+    return o;
+}
+
 static int spirv_is_mesh(const uint32_t *w, uint64_t n) {
     for (uint64_t i = 5; i < n && w[i] >> 16; i += w[i] >> 16)
         if ((w[i] & 0xffff) == 15) return i + 1 < n && w[i + 1] == 5365;

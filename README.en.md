@@ -17,6 +17,8 @@ The game's code is translated to C and compiled into a Windows program. The Swit
 > From now on our fixes go to Hookshot as contributions. This repository stays as a Portuguese-language support point: questions, reports and guides.
 >
 > **Your saves still work:** they are the same files. They are in the `perfil\save` folder of the install. Hookshot's save guide ([docs/saves.md](https://github.com/NotRexed/Hookshot/blob/main/docs/saves.md)) shows how to copy them.
+>
+> **No `.nup` any more?** Hookshot Builder also takes a folder that holds `romfs` and `exefs` (its "romfs and exefs folders" option): `jogar\hookshot-preparar-jogo.bat` makes it from this install's game files, in about 27 GB of free space. Once Hookshot is built, `jogar\hookshot-copiar-save.bat` copies your save into it; if Hookshot is not in its default folder, drop its game folder on that file. An install made before this change does not have these files: copy `tools/oot/hookshot.py`, `jogar/hookshot-preparar-jogo.bat` and `jogar/hookshot-copiar-save.bat` from this repository into the same folders of the install.
 
 > [!IMPORTANT]
 > This repository **does not contain the game, keys or an executable**, and it does not explain how to get them. You need your own copy. Everything the installation creates (`ocarina.exe`, the generated code, the shader cache and the saves) comes from your game: **do not share it**.
