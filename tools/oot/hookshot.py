@@ -47,6 +47,8 @@ HOOKSHOT_USER_ID = '5a3c9e1f0b7d24680000000000000001'
 
 
 def portuguese():
+    if os.environ.get('OOT_LANG'):   # pt or en: the tests fix the language, whatever the Windows UI is
+        return os.environ['OOT_LANG'].lower().startswith('pt')
     if os.name == 'nt':
         try:
             import ctypes

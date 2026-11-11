@@ -32,6 +32,8 @@ UID = '5a3c9e1f0b7d24680000000000000001'
 ACCT = bytes(range(16))
 ACCT_DIR = ACCT[::-1].hex()
 NT = os.name == 'nt'
+if NT:   # the checks read the English messages; the Windows UI language would pick Portuguese on a Brazilian PC
+    os.environ['OOT_LANG'] = 'en'
 FILES = {'a.txt': b'alpha', 'dir/b.bin': bytes(range(256)) * 40, 'dir/sub/empty': b'', 'Acao/c d.txt': b'ola'}
 failed, checks = [], [0]
 
