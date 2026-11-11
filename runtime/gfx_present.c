@@ -610,8 +610,27 @@ static void present_image(VkImage src, VkImageLayout layout, VkFormat fmt, int w
                      g_sc_ext.height, cw, ch, g_scaler};
     int overlay = g_sc_view[idx] &&
                   menu_overlay_frame(__atomic_load_n(&gfx_counters.frames, __ATOMIC_RELAXED), &mt, &menu_shot);
+    {   // LOCAL TEST: OOT_WINDOW_SHOT=<present>:<file.png> saves the window's picture of that present
+        static long at[2] = {-2, -2};
+        static const char *file[2];
+        for (int i = 0; i < 2; i++) {
+            if (at[i] == -2) {
+                const char *e = getenv(i ? "OOT_WINDOW_SHOT2" : "OOT_WINDOW_SHOT");
+                char *end = NULL;
+                at[i] = e ? strtol(e, &end, 10) : -1;
+                if (at[i] >= 0 && end && *end == ':') file[i] = end + 1;
+                else at[i] = -1;
+            }
+            if (!menu_shot && at[i] >= 0 && (long)g_frame == at[i]) menu_shot = file[i];
+        }
+        const char *f9 = getenv("OOT_TEST_F9");   // LOCAL TEST: OOT_TEST_F9=<present> presses F9 in the window then
+        if (f9 && (long)g_frame == atol(f9)) wsys_probe_f9();
+    }
     int cap = (g_capture || menu_shot) && ensure_capture_buffer();
     int thumb = g_th_n && ensure_thumbs();
+    vr_camera_live();
+    int vr_raw = 0;
+    VkImage vr_img = vr_frame_begin(VK_FORMAT_R8G8B8A8_UNORM, 2u * (uint32_t)cw, (uint32_t)ch, &vr_raw);
 
     VkCommandBuffer cb = g_cb[slot];
     vkResetCommandBuffer(cb, 0);
@@ -680,8 +699,12 @@ static void present_image(VkImage src, VkImageLayout layout, VkFormat fmt, int w
     VkImage psrc = graded ? graded : src;
     VkFormat pfmt = graded ? VK_FORMAT_R16G16B16A16_SFLOAT : fmt;
     const int *prect = graded ? grect : rect;
+    VkImage eyes = general ? vr_stereo_record(cb, slot, psrc, pfmt, prect) : VK_NULL_HANDLE;
+    const int erect[4] = {0, 0, 2 * cw, ch};
+    int pw = cw;
+    if (eyes && vr_stereo_in_window()) psrc = eyes, pfmt = VK_FORMAT_R8G8B8A8_UNORM, prect = erect, pw = 2 * cw;
     // FSR (TOTK_UPSCALER) when the picture's rectangle is larger than the crop; else the bilinear blit
-    int fsr = general && vk_fsr_record(cb, slot, psrc, pfmt, graded ? cw : w, graded ? ch : h, prect, dst, to);
+    int fsr = general && pw == cw && vk_fsr_record(cb, slot, psrc, pfmt, graded ? cw : w, graded ? ch : h, prect, dst, to);
     g_scaler = fsr ? 2 : cw != to[2] || ch != to[3];
     if (!fsr) {
         if (general)   // a GENERAL source (vk_texture.c images): earlier submissions' writes become visible to the blit here
@@ -689,7 +712,7 @@ static void present_image(VkImage src, VkImageLayout layout, VkFormat fmt, int w
                          VK_ACCESS_2_MEMORY_WRITE_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
         VkImageBlit region = {
             .srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
-            .srcOffsets = {{prect[0], prect[1], 0}, {prect[0] + cw, prect[1] + ch, 1}},
+            .srcOffsets = {{prect[0], prect[1], 0}, {prect[0] + pw, prect[1] + ch, 1}},
             .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .dstOffsets = {{to[0], to[1], 0}, {to[0] + to[2], to[1] + to[3], 1}}};
         vkCmdBlitImage(cb, psrc, general ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dst,
                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region, VK_FILTER_LINEAR);
@@ -736,6 +759,25 @@ static void present_image(VkImage src, VkImageLayout layout, VkFormat fmt, int w
         last_write = 0;
         record_thumb(cb, dst, slot);
     }
+    if (vr_img && eyes) {
+        sync_barrier(cb, vr_img, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                     VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, 0, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                     VK_ACCESS_2_TRANSFER_WRITE_BIT);
+        const VkImageSubresourceLayers one = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        if (vr_raw) {
+            VkImageCopy rg = {.srcSubresource = one, .dstSubresource = one, .extent = {2u * (uint32_t)cw, (uint32_t)ch, 1}};
+            vkCmdCopyImage(cb, eyes, VK_IMAGE_LAYOUT_GENERAL, vr_img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &rg);
+        } else {
+            const VkOffset3D end = {2 * cw, ch, 1};
+            VkImageBlit rg = {.srcSubresource = one, .srcOffsets = {{0, 0, 0}, end}, .dstSubresource = one,
+                              .dstOffsets = {{0, 0, 0}, end}};
+            vkCmdBlitImage(cb, eyes, VK_IMAGE_LAYOUT_GENERAL, vr_img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &rg,
+                           VK_FILTER_NEAREST);
+        }
+        sync_barrier(cb, vr_img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                     VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                     VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, 0);
+    }
     sync_barrier(cb, dst, last, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, last_stage, last_write, VK_PIPELINE_STAGE_2_NONE, 0);
     vk_crumb(cb, VK_CRUMB_PRESENT_END, crumb);
     if (timed) vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, g_ts_pool, 2 * slot + 1);
@@ -763,6 +805,7 @@ static void present_image(VkImage src, VkImageLayout layout, VkFormat fmt, int w
         vk_device_fault_report(r);
         rt_log("gfx: present submit failed (%d)", (int)r);
     }
+    vr_frame_end(eyes != VK_NULL_HANDLE);
     g_frame++;
     if (cap) {
         vkWaitForFences(c->device, 1, &g_fence[slot], VK_TRUE, 5000000000ull);
@@ -811,6 +854,7 @@ void gfx_window_release_vk(void) {
         vk_fsr_release();
         vk_framegen_release();
         vk_color_release();
+        vr_stereo_release();
         free_capture();
         free_thumbs();
         for (int i = 0; i < FRAMES; i++) {

@@ -1,0 +1,55 @@
+#version 450
+// Depth 3D (runtime/vr_stereo.c): two eye pictures from one picture and its scene depth. dst is twice the crop's width,
+// the left eye in its left half. A point at view distance z is moved sideways by q(z) = par.x / z + par.y of the width.
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(binding = 0) uniform sampler2D src;
+layout(binding = 1) uniform sampler2D depth;   // 0 near .. 1 far, over the whole crop
+layout(binding = 2, rgba8) uniform writeonly image2D dst;
+layout(push_constant) uniform P {
+    ivec2 offset;   // the crop rectangle's corner in src
+    ivec2 size;     // its size
+    vec4 lin;       // view distance = lin.z / (d * lin.y + lin.x)
+    vec4 par;       // q at 1 / z = 1, q at infinity, the largest q, 1: both eyes get q = 0
+} pc;
+
+const int STEPS = 32;
+
+// nearest depth of the 3x3 texels: depth edges are not antialiased, the colour edges are
+float q_at(float x, float y) {
+    const vec2 uv = vec2(x, y);
+    float d = textureLod(depth, uv, 0.0).r;
+    d = min(d, textureLodOffset(depth, uv, 0.0, ivec2(-1, -1)).r);
+    d = min(d, textureLodOffset(depth, uv, 0.0, ivec2(0, -1)).r);
+    d = min(d, textureLodOffset(depth, uv, 0.0, ivec2(1, -1)).r);
+    d = min(d, textureLodOffset(depth, uv, 0.0, ivec2(-1, 0)).r);
+    d = min(d, textureLodOffset(depth, uv, 0.0, ivec2(1, 0)).r);
+    d = min(d, textureLodOffset(depth, uv, 0.0, ivec2(-1, 1)).r);
+    d = min(d, textureLodOffset(depth, uv, 0.0, ivec2(0, 1)).r);
+    d = min(d, textureLodOffset(depth, uv, 0.0, ivec2(1, 1)).r);
+    return min(pc.par.x * (d * pc.lin.y + pc.lin.x) / pc.lin.z + pc.par.y, pc.par.z);
+}
+
+void main() {
+    const ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (p.x >= 2 * pc.size.x || p.y >= pc.size.y) return;
+    const bool right = p.x >= pc.size.x;
+    const float e = right ? -1.0 : 1.0;
+    const vec2 uv = (vec2(right ? p.x - pc.size.x : p.x, p.y) + 0.5) / vec2(pc.size);
+    float t = pc.par.y;
+    if (pc.par.w == 0.0) {
+        float t0 = pc.par.z, f0 = q_at(uv.x - e * t0, uv.y) - t0;
+        if (f0 >= 0.0) t = t0;
+        else
+            for (int i = 1; i < STEPS; i++) {
+                const float t1 = mix(pc.par.z, pc.par.y, float(i) / float(STEPS - 1));
+                const float f1 = q_at(uv.x - e * t1, uv.y) - t1;
+                if (f1 >= 0.0) {
+                    t = t0 + (t1 - t0) * (-f0 / (f1 - f0));
+                    break;
+                }
+                t0 = t1, f0 = f1;
+            }
+    }
+    const vec2 s = (vec2(pc.offset) + vec2(clamp(uv.x - e * t, 0.0, 1.0), uv.y) * vec2(pc.size)) / vec2(textureSize(src, 0));
+    imageStore(dst, p, vec4(clamp(textureLod(src, s, 0.0).rgb, 0.0, 1.0), 1.0));
+}

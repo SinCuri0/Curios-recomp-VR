@@ -124,6 +124,33 @@ int vk_framegen_make(VkImage src, VkFormat fmt, int sw, int sh, const int crop[4
                      int *ow, int *oh);
 VkFormat vk_framegen_format(void);
 void vk_framegen_release(void);
+// vr_xr.c: OpenXR (TOTK_VR=1). The two *_extensions add the names the headset needs to ext[0..n) and return the new n.
+uint32_t vr_instance_extensions(const char **ext, uint32_t n, uint32_t max);
+VkPhysicalDevice vr_physical_device(VkInstance instance);   // VK_NULL_HANDLE: no headset, any GPU
+uint32_t vr_device_extensions(const char **ext, uint32_t n, uint32_t max);
+void vr_session_create(const VkCtx *c);
+// An image (COLOR_ATTACHMENT_OPTIMAL, w x h, the left eye in its left half) for this frame, or VK_NULL_HANDLE.
+VkImage vr_frame_begin(VkFormat eyes_fmt, uint32_t w, uint32_t h, int *raw_copy);   // raw_copy 1: vkCmdCopyImage
+void vr_frame_end(int drawn);   // after the submit that wrote the image; drawn 0: nothing was written
+void vr_shutdown(void);
+// vr_stereo.c: depth 3D. TOTK_VR=1 the world around the head, =screen a 3D screen, =sbs both eyes side by side in the window.
+enum { VR_OFF, VR_WORLD, VR_WINDOW, VR_SCREEN };
+int vr_mode(void);
+void vr_stereo_fov(float *p00, float *p11);   // the projection of the picture last recorded
+float vr_ipd(void);                           // metres between the eyes
+int vr_stereo_wanted(void);
+int vr_stereo_in_window(void);
+// Both eyes of src's crop {x, y, w, h}: an RGBA8 image in GENERAL, 2w x h, or VK_NULL_HANDLE.
+VkImage vr_stereo_record(VkCommandBuffer cb, unsigned slot, VkImage src, VkFormat fmt, const int crop[4]);
+void vr_stereo_release(void);
+int vr_head_pose(float fwd[3], float p[3]);   // the head in the play space: forward without roll, metres; 0: none yet
+// vr_camera.c: the head moves the game camera (patch set vrcam, recomp/patches-oot111.txt).
+void vr_camera_view(float m[12], const float fh[3], const float ph[3], float move, int level, const float *eye);
+int vr_camera_projection(float *p00, float *p11);   // the widened projection of the main view; 0: the game's own
+int vr_headset_tan(float *tx, float *ty);             // vr_xr.c: tangents of the headset's half view angles; 0: unknown
+void vr_camera_turn_stick(int32_t *x, int32_t *y);   // the left stick turned by the head's yaw, while the head turns the view
+void vr_camera_toggle_first(void);   // first person on / off (TOTK_VR_FIRST)
+void vr_camera_live(void);   // every present: the patch set follows TOTK_VR
 // Colour adjustment on the present (vk_color.c): with TOTK_COLOR_* away from their defaults, records a pass that writes
 // src's crop rectangle {x, y, w, h}, adjusted, into an RGBA16F image of that size in GENERAL and returns it (the caller
 // scales that one instead, crop {0, 0, w, h}); VK_NULL_HANDLE = nothing recorded. src is in GENERAL, fmt its format.

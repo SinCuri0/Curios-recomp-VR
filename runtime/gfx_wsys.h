@@ -12,6 +12,7 @@ void wsys_resize(int w, int h);            // gfx_window_resize: the drawable ar
 // --probe-window (gfx_window_probe.c): synthetic window events, handled on the window thread before these return.
 void wsys_probe_focus(int in);             // the window gains (1) or loses (0) the focus
 void wsys_probe_escape(void);              // Esc pressed
+void wsys_probe_f9(void);                  // F9 pressed
 // A left click: 0 in the client area, 1 activating the window from its client area, 2 activating it from the title bar.
 // 0 when the window system has no such event (then the caller skips that check).
 int wsys_probe_click(int where);

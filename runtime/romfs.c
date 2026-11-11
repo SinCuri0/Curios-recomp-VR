@@ -586,6 +586,16 @@ uint32_t romfs_mount(const char *name) {
     return 0;
 }
 
+static uint8_t handle_video[NH];
+static volatile int videos_open;
+
+int romfs_videos_open(void) { return videos_open; }
+
+static int is_video(const char *p) {
+    const size_t n = strlen(p);
+    return strstr(p, "Event/Movie/") && n > 5 && !strcmp(p + n - 5, ".webm");
+}
+
 uint32_t romfs_open(uint64_t *out, const char *path, int mode) {
     fs_trace("rom", path);
     if (!out || mode != FS_OPEN_READ) return FS_R_UNSUPPORTED_OPEN;
@@ -609,6 +619,8 @@ uint32_t romfs_open(uint64_t *out, const char *path, int mode) {
             handles[j] = i + 1;
             handle_ovl[j] = ov;
             handle_file[j] = f;
+            handle_video[j] = (uint8_t)is_video(p);
+            if (handle_video[j]) videos_open++, rt_log("romfs: video %s opened", p);
             *out = ROMFS_HANDLE_BASE + j;
             plat_mutex_unlock(&lock);
             return 0;
@@ -678,6 +690,7 @@ void romfs_close(uint64_t h) {
     plat_mutex_lock(&lock);
     PlatFile *of = handle_ovl[j] ? handle_file[j] : NULL;
     handles[j] = 0;
+    if (handle_video[j]) handle_video[j] = 0, videos_open--, rt_log("romfs: a video file closed, %d still open", videos_open);
     handle_ovl[j] = 0;
     handle_file[j] = NULL;
     plat_mutex_unlock(&lock);

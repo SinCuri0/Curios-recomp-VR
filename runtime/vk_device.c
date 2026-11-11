@@ -57,8 +57,9 @@ static void mesa_cache_beside_exe(void) {
 
 static int create_instance(void) {
     mesa_cache_beside_exe();
-    const char *ext[8];
+    const char *ext[32];
     uint32_t n_ext = (uint32_t)gfx_window_vk_extensions(ext, 7);
+    n_ext = vr_instance_extensions(ext, n_ext, 31);
     const char *layers[] = {"VK_LAYER_KHRONOS_validation"};
     int validate = cfg_bool("TOTK_VK_VALIDATION");
     if (validate && !layer_present(layers[0])) {
@@ -134,11 +135,13 @@ static int pick_device(void) {
     const char *name = cfg_get("TOTK_GPU_NAME");
     int best = -1, best_score = -1;
     VkPhysicalDeviceProperties best_p = {0};
+    VkPhysicalDevice headset_gpu = vr_physical_device(g_vk.instance);
     for (uint32_t i = 0; i < n; i++) {
         VkPhysicalDeviceProperties p;
         vkGetPhysicalDeviceProperties(pd[i], &p);
         rt_log("vk: gpu %u: %s (type %d, api %u.%u.%u)", i, p.deviceName, (int)p.deviceType, VK_API_VERSION_MAJOR(p.apiVersion),
                VK_API_VERSION_MINOR(p.apiVersion), VK_API_VERSION_PATCH(p.apiVersion));
+        if (headset_gpu && pd[i] != headset_gpu) { rt_log("vk: gpu %u skipped: the headset is on another gpu", i); continue; }
         if (want >= 0 && (int)i != want) continue;
         if (name && *name && !name_has(p.deviceName, name)) continue;
         if (p.apiVersion < VK_API_VERSION_1_3) { rt_log("vk: gpu %u skipped: Vulkan below 1.3", i); continue; }
@@ -219,7 +222,7 @@ static int create_device(void) {
     vkEnumerateDeviceExtensionProperties(g_vk.phys, NULL, &ne, NULL);
     VkExtensionProperties *ep = calloc(ne ? ne : 1, sizeof *ep);
     vkEnumerateDeviceExtensionProperties(g_vk.phys, NULL, &ne, ep);
-    const char *ext[48];
+    const char *ext[64];
     uint32_t n_ext = 0;
     for (size_t i = 0; i < sizeof k_required_ext / sizeof *k_required_ext; i++) ext[n_ext++] = k_required_ext[i];
 
@@ -341,6 +344,7 @@ static int create_device(void) {
                                           .queueFamilyIndex = g_vk.xfer_family, .queueCount = 1, .pQueuePriorities = &prio};
         nqi = 2;
     }
+    n_ext = vr_device_extensions(ext, n_ext, 64);
     VkDeviceCreateInfo di = {.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO, .pNext = &c->f2, .queueCreateInfoCount = nqi,
                              .pQueueCreateInfos = qi, .enabledExtensionCount = n_ext, .ppEnabledExtensionNames = ext};
     VkResult r = vkCreateDevice(g_vk.phys, &di, NULL, &g_vk.device);
@@ -387,6 +391,7 @@ static int create_device(void) {
         return 0;
     }
     vk_crumbs_init(&g_vk);
+    vr_session_create(&g_vk);
     return 1;
 }
 
@@ -395,6 +400,7 @@ static long g_errors_total;     // outlives the device so the probe can print it
 static void destroy_all(void) {
     gfx_window_release_vk();
     if (g_vk.device) vkDeviceWaitIdle(g_vk.device);
+    vr_shutdown();
     if (g_vk.device) vk_clear_shutdown(g_vk.device);
     if (g_vk.device) vk_astc_release();
     if (g_vk.device) vk_crumbs_release();

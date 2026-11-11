@@ -32,7 +32,7 @@ static struct {
     VkImageView view[RING];
     uint32_t w, h;
     OotMotionFrame cam[RING];
-    int wr, pending;
+    int wr, pending, have_probe;
     const VkTexImage *pend_depth;
     OotMotionFrame pend;
     volatile int latest;   // ring slot of the newest copy, -1 none; taken by the present
@@ -117,7 +117,7 @@ static int ensure(VkCtx *c, VkCommandBuffer cb, uint32_t w, uint32_t h) {
 
 // prepare_draw of the probe's draw (vk_exec_draw.c): its camera from the uniform snapshot, its depth texture.
 void oot_motion_note(VkExec *ex) {
-    if (vk_framegen_mult() < 2 && !oot_motion_scene_taa()) return;
+    if (vk_framegen_mult() < 2 && !oot_motion_scene_taa() && !vr_stereo_wanted()) return;
     const p_bind_buf *b = &ex->ubo[NVN_STAGE_VS][0];   // c3
     VkDescriptorBufferInfo bi;
     const float *c3;
@@ -132,17 +132,19 @@ void oot_motion_note(VkExec *ex) {
     memcpy(f->view, c3 + 3 * 4, 12 * sizeof(float));   // rows 3, 4, 5
     f->p00 = c3[6 * 4 + 0], f->p11 = c3[7 * 4 + 1];
     f->lin_x = c3[10 * 4 + 0], f->lin_y = c3[10 * 4 + 1], f->near_ = c3[11 * 4 + 0];
+    if (getenv("OOT_VR_CAMLOG")) {
+        static int n;
+        if (n++ % 4 == 0 && n < 80)
+            rt_log("vr camera: render view x %.3f %.3f %.3f back %.3f %.3f %.3f t %.2f %.2f %.2f, P00 %.4f P11 %.4f", f->view[0],
+                   f->view[1], f->view[2], f->view[8], f->view[9], f->view[10], f->view[3], f->view[7], f->view[11], f->p00, f->p11);
+    }
     M.pend_depth = t;
-    M.pending = 1;
+    M.pending = M.have_probe = 1;
 }
 
-// vk_exec_pass_end, outside the probe's pass: the depth copy.
-void oot_motion_pass_end(VkExec *ex) {
-    if (!M.pending) return;
-    M.pending = 0;
+static void copy_depth(VkExec *ex, const VkTexImage *t, const OotMotionFrame *cam) {
     VkCtx *c = vk_ctx();
     if (!M.tried) init(c);
-    const VkTexImage *t = M.pend_depth;
     if (!M.ok || !t || !ensure(c, ex->cb, t->width, t->height)) return;
     VkImageView dv = vk_exec_target_view(t, t->format, VK_IMAGE_VIEW_TYPE_2D, VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1, 0);
     if (!dv) return;
@@ -161,11 +163,52 @@ void oot_motion_pass_end(VkExec *ex) {
     ex->recorded++;
     vk_exec_forget_compute();
     vk_exec_barrier(ex);
-    M.cam[s] = M.pend;
+    M.cam[s] = *cam;
     M.cam[s].depth = M.view[s];
     M.cam[s].w = M.w, M.cam[s].h = M.h;
     M.written = s, M.seq++;
     __atomic_store_n(&M.latest, s, __ATOMIC_RELEASE);
+}
+
+// The probe does not draw in every frame: depth 3D (vr_stereo.c) takes the depth of the largest non-square D32F passes.
+static void scene_depth(VkExec *ex) {
+    static uint64_t frame;
+    static uint32_t best_w, best_h, scene_w, scene_h;
+    static const tex_t *written;
+    uint64_t f = __atomic_load_n(&gfx_counters.frames, __ATOMIC_RELAXED);
+    if (f != frame) {
+        if (best_w && (best_w != scene_w || best_h != scene_h)) {
+            scene_w = best_w, scene_h = best_h;
+            rt_log("vr: scene depth from the %ux%u passes", scene_w, scene_h);
+        }
+        best_w = best_h = 0, frame = f;
+    }
+    int like = ex->depth.image && ex->depth.tex && ex->pass_depth == VK_FORMAT_D32_SFLOAT &&
+               ex->pass_color[0] != VK_FORMAT_UNDEFINED && ex->pass_w != ex->pass_h && ex->depth.width == ex->pass_w &&
+               ex->depth.height == ex->pass_h;
+    if (like && (uint64_t)ex->pass_w * ex->pass_h > (uint64_t)best_w * best_h) best_w = ex->pass_w, best_h = ex->pass_h;
+    if (like && ex->pass_w == scene_w && ex->pass_h == scene_h) {
+        written = ex->depth.tex;
+        return;
+    }
+    if (!written) return;
+    const VkTexImage *t = vk_texture_get(written);
+    written = NULL;
+    if (!t || !(t->aspect & VK_IMAGE_ASPECT_DEPTH_BIT) || t->width != scene_w || t->height != scene_h) return;
+    OotMotionFrame cam = M.have_probe ? M.pend : (OotMotionFrame){.lin_x = 1.0f, .lin_y = -1.0f, .near_ = 0.1f};
+    copy_depth(ex, t, &cam);
+}
+
+// vk_exec_pass_end, outside the pass that ended: the depth copy.
+void oot_motion_pass_end(VkExec *ex) {
+    if (vr_stereo_wanted()) {
+        M.pending = 0;
+        scene_depth(ex);
+        return;
+    }
+    if (!M.pending) return;
+    M.pending = 0;
+    copy_depth(ex, M.pend_depth, &M.pend);
 }
 
 // The scene's temporal pass, on the replay thread: this frame's copy (seq: which one; 0 when none yet).

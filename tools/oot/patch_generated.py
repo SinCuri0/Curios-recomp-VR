@@ -39,11 +39,13 @@ FIXED_RES = r'''/* Fixed 3D resolution (OOT_RESOLUTION in the ini, TOTK_OOT_RESO
    picks the GPU-time controller; the other path (L_700080640c) returns a fixed scale, 1.0 as shipped. The dynamic path
    runs 30 frames first: it also writes fields the rest of the frame reads (+8, +16, +168), and the fixed path taken
    from the first frame left them unset and the 3D black. After NotRexed/Hookshot c02f290d47ff (nx2/oot_patches.py,
-   host/nn_vi.c, GPL-3.0). "auto": the game's own; a percentage 25..200 (above 100 untested). */
+   host/nn_vi.c, GPL-3.0). "auto": the game's own, 100 with VR on; a percentage 25..200 (above 100 untested). */
 extern const char *cfg_get(const char *);
 extern unsigned cfg_version(void);
 extern void rt_log(const char *, ...);
 extern double strtod(const char *, char **);
+extern int strcmp(const char *, const char *);
+extern int vr_stereo_wanted(void);
 static int oot_dynres_runs;
 static uint32_t oot_res_bits = 0x3f800000u;
 static int oot_fixed_res(void) {
@@ -55,6 +57,7 @@ static int oot_fixed_res(void) {
         // cfg_get, not cfg_value: a runtime built before the setting existed has no table row, and cfg_value made that fatal
         const char *s = cfg_get("TOTK_OOT_RESOLUTION");
         if (!s || !*s) s = "auto";
+        if (!strcmp(s, "auto") && vr_stereo_wanted()) s = "100";   // VR: the dynamic floor is too blurry in a headset
         char *end;
         double pct = strtod(s, &end);
         fixed = end != s && !*end && pct >= 25 && pct <= 200;

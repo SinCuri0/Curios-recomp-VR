@@ -227,6 +227,7 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT m, WPARAM w, LPARAM l) {
             cfg_save();
             note_applied();   // what cfg_get reads now (the environment may still override it)
         }
+        if (w == VK_F9 && !(l & (1 << 30)) && vr_stereo_wanted()) vr_camera_toggle_first();
         break;
     case WM_APP_SETTINGS:
         apply_settings(h);
@@ -382,6 +383,7 @@ void wsys_resize(int cw, int ch) {
 void wsys_probe_focus(int in) { SendMessageW(g_hwnd, WM_ACTIVATEAPP, in ? TRUE : FALSE, 0); }
 
 void wsys_probe_escape(void) { SendMessageW(g_hwnd, WM_KEYDOWN, VK_ESCAPE, 0); }
+void wsys_probe_f9(void) { PostMessageW(g_hwnd, WM_KEYDOWN, VK_F9, 0); }
 
 int wsys_probe_click(int where) {
     if (where == 0) SendMessageW(g_hwnd, WM_LBUTTONDOWN, MK_LBUTTON, 0);

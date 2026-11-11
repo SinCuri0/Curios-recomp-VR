@@ -166,6 +166,7 @@ static void handle(const SDL_Event *e) {
             cfg_save();
             note_applied();
         }
+        if (e->key.scancode == SDL_SCANCODE_F9 && !e->key.repeat && vr_stereo_wanted()) vr_camera_toggle_first();
         break;
     case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
     case SDL_EVENT_WINDOW_RESIZED:
@@ -315,6 +316,12 @@ static void probe_event(void *arg) { handle(arg); }
 void wsys_probe_focus(int in) {
     SDL_Event e = {.window = {.type = in ? SDL_EVENT_WINDOW_FOCUS_GAINED : SDL_EVENT_WINDOW_FOCUS_LOST,
                               .windowID = SDL_GetWindowID(g_win)}};
+    run_on_window(probe_event, &e);
+}
+
+void wsys_probe_f9(void) {
+    SDL_Event e = {.key = {.type = SDL_EVENT_KEY_DOWN, .scancode = SDL_SCANCODE_F9, .key = SDLK_F9, .down = true,
+                           .windowID = SDL_GetWindowID(g_win)}};
     run_on_window(probe_event, &e);
 }
 

@@ -21,6 +21,12 @@ O código do jogo é traduzido para C e compilado como um programa do Windows. O
 > [!IMPORTANT]
 > Este repositório **não contém o jogo, keys nem executável**, e não explica como obtê-los. Você precisa da sua própria cópia. O que a instalação gera (o `ocarina.exe`, o código gerado, o cache de shaders e os saves) sai do seu jogo: **não compartilhe**.
 
+## Fork VR
+
+Este fork ([SinCuri0/Curios-recomp-VR](https://github.com/SinCuri0/Curios-recomp-VR)) adiciona um modo VR experimental, ainda em andamento. A descrição completa, os testes e as configurações estão no [README em inglês](README.en.md#vr-fork).
+
+Obrigado ao **Miojo** ([sostenesfreitas](https://github.com/sostenesfreitas)), que criou o [Ocarina Recomp](https://github.com/sostenesfreitas/ocarina-recomp). Este fork é feito sobre esse trabalho.
+
 ## Estado do projeto
 
 Experimental. Só foi testado em **um PC** (Ryzen 9 9950X3D, RTX 5090), na região do início do jogo.

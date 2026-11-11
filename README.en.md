@@ -21,6 +21,41 @@ The game's code is translated to C and compiled into a Windows program. The Swit
 > [!IMPORTANT]
 > This repository **does not contain the game, keys or an executable**, and it does not explain how to get them. You need your own copy. Everything the installation creates (`ocarina.exe`, the generated code, the shader cache and the saves) comes from your game: **do not share it**.
 
+## VR fork
+
+This fork ([SinCuri0/Curios-recomp-VR](https://github.com/SinCuri0/Curios-recomp-VR)) adds an experimental VR mode. It is work in progress.
+
+**Plan.** This fork finds the game facts that VR needs: the camera, Link's head, cutscenes and videos. The finished VR mode will move to the [Fritchii](https://github.com/Frizti/Fritchii/tree/oot-gather-fix) emulator, because it runs the game better. For that reason, graphics problems in VR (blur, resolution, upscaler) are not fixed here.
+
+**What works.** Tested in the side-by-side window mode (`vr = sbs`), not in a headset:
+
+- Head tracking turns the game camera.
+- Depth 3D: the second eye comes from the scene depth.
+- First person from Link's head, with his head hidden. **F9** turns it on and off.
+- The left stick walks where you look.
+- In talk cutscenes, first person pauses and the game's camera shows the scene, still in 3D.
+- The code detects when a video plays (the title screen, the new-game intro and some story scenes). Videos have no 3D data. The plan is to show them on a screen that stays fixed in the room.
+
+**Not done or not tested.**
+
+- Only one headset test (PlayStation VR2 through SteamVR), made before most of this work.
+- Story cutscenes and adult Link.
+- The HUD and the menus are not placed for VR.
+- Videos are not shown on the fixed screen yet.
+
+**Settings** (in `totk.ini`, or as an environment variable with the `TOTK_` prefix, for example `TOTK_VR=1`):
+
+| Key | Values |
+|---|---|
+| `vr` | `1`: OpenXR headset. `sbs`: both eyes side by side in the window, no headset. |
+| `vr_first` | `1`: start in first person. |
+| `vr_eye_up` | Eye height above Link's head bone, in metres. Default `0.1`. |
+| `vr_fov` | Vertical field of view in degrees. Default: the headset's own. |
+
+You need an OpenXR runtime, such as SteamVR. To build with headset support, install the MSYS2 package `mingw-w64-ucrt-x86_64-openxr-sdk`. Without it, only `sbs` works.
+
+**Thanks** to **Miojo** ([sostenesfreitas](https://github.com/sostenesfreitas)), who made [Ocarina Recomp](https://github.com/sostenesfreitas/ocarina-recomp). This fork is built on that work, and on the work of everyone listed in the credits below.
+
 ## Project status
 
 Experimental. It has only been tested on **one PC** (Ryzen 9 9950X3D, RTX 5090), in the area at the start of the game.
