@@ -1299,6 +1299,86 @@ static uint32_t *spirv_nan_minmax(const uint32_t *w, uint64_t n) {
     return o;
 }
 
+// Intel and AMD: every GLSL.std.450 Sqrt(x) becomes Sqrt(NMax(x, 0)). NVIDIA keeps an FMA single-rounded, so a value the
+// console computes as exactly 0 can come out slightly negative elsewhere, and its Sqrt is NaN: the HDR encode compute (prog 102)
+// then draws black leaves and silhouettes (issue #49). NMax also turns a NaN operand into 0. A copy of the module with a new
+// bound, or NULL when there is no Sqrt. Every stage by default (the driver rebuilds each changed pipeline once):
+// OOT_SQRT_CLAMP=0 turns it off, =1 limits it to compute shaders.
+static uint32_t *spirv_sqrt_clamp(const uint32_t *w, uint64_t n, uint64_t *out_n) {
+    static int on = -1;
+    if (on < 0) {
+        const char *e = getenv("OOT_SQRT_CLAMP");
+        on = e && *e ? atoi(e) : 2;   // every stage: Link came out black from a vertex/fragment Sqrt on Intel
+    }
+    if (!on || !w || n < 5) return NULL;
+    if (on == 1) {   // only a module whose entry point is GLCompute
+        int compute = 0;
+        for (uint64_t i = 5; i < n && w[i] >> 16; i += w[i] >> 16)
+            if ((w[i] & 0xffff) == 15) { compute = w[i + 1] == 5; break; }
+            else if ((w[i] & 0xffff) == 54) break;
+        if (!compute) return NULL;
+    }
+    enum { MAXT = 64 };
+    uint32_t glsl = 0, floats[MAXT], nf = 0, types[MAXT], zeros[MAXT], nt = 0, nsqrt = 0;
+    uint64_t first_fn = 0;
+    for (uint64_t i = 5; i < n && w[i] >> 16;) {
+        uint32_t op = w[i] & 0xffff, len = w[i] >> 16;
+        if (i + len > n) return NULL;
+        if (op == 11 && len >= 3 && !memcmp(&w[i + 2], "GLSL.std.450", 12)) glsl = w[i + 1];
+        else if (op == 22 && nf < MAXT) floats[nf++] = w[i + 1];                       // OpTypeFloat
+        else if (op == 23 && nf < MAXT) {                                               // OpTypeVector of a float
+            for (uint32_t k = 0; k < nf; k++)
+                if (floats[k] == w[i + 2]) { floats[nf++] = w[i + 1]; break; }
+        } else if (op == 54 && !first_fn) first_fn = i;                                 // OpFunction
+        else if (op == 12 && len >= 6 && glsl && w[i + 3] == glsl && w[i + 4] == 31) {  // OpExtInst Sqrt
+            int is_float = 0, known = 0;
+            for (uint32_t k = 0; k < nf; k++) is_float |= floats[k] == w[i + 1];
+            for (uint32_t k = 0; k < nt; k++) known |= types[k] == w[i + 1];
+            if (!is_float) continue;
+            if (!known) {
+                if (nt == MAXT) return NULL;
+                types[nt++] = w[i + 1];
+            }
+            nsqrt++;
+        }
+        i += len;
+    }
+    if (!nsqrt || !first_fn) return NULL;
+    uint64_t total = n + 3ull * nt + 7ull * nsqrt;
+    uint32_t *o = malloc((size_t)total * 4);
+    if (!o) rt_fatal("vk_pipeline: out of memory");
+    uint32_t bound = w[3];
+    for (uint32_t k = 0; k < nt; k++) zeros[k] = bound++;
+    uint64_t j = 0;
+    memcpy(o, w, 5 * 4);
+    j = 5;
+    for (uint64_t i = 5; i < n && w[i] >> 16;) {
+        uint32_t op = w[i] & 0xffff, len = w[i] >> 16;
+        if (i == first_fn)
+            for (uint32_t k = 0; k < nt; k++) o[j++] = (3u << 16) | 46, o[j++] = types[k], o[j++] = zeros[k];   // OpConstantNull
+        int clamp = 0;
+        uint32_t z = 0;
+        if (op == 12 && len >= 6 && w[i + 3] == glsl && w[i + 4] == 31)
+            for (uint32_t k = 0; k < nt; k++)
+                if (types[k] == w[i + 1]) clamp = 1, z = zeros[k];
+        if (clamp) {   // %t = NMax %x %zero, then the Sqrt reads %t
+            uint32_t t = bound++;
+            o[j++] = (7u << 16) | 12, o[j++] = w[i + 1], o[j++] = t, o[j++] = glsl, o[j++] = 80, o[j++] = w[i + 5], o[j++] = z;
+            memcpy(&o[j], &w[i], (size_t)len * 4);
+            o[j + 5] = t;
+            j += len;
+        } else {
+            memcpy(&o[j], &w[i], (size_t)len * 4);
+            j += len;
+        }
+        i += len;
+    }
+    o[3] = bound;
+    *out_n = j;
+    return o;
+}
+
+
 static const uint32_t *fs_spirv_over(const GfxShader *fs, uint64_t *words) {   // the override is kept: a few shaders
     const uint32_t *w = gfx_shader_spirv(fs, words);
     uint64_t n = 0;
@@ -1313,6 +1393,9 @@ static VkShaderModule make_module_linked(const uint32_t *w, uint64_t words, int 
     if (over) w = over, words = over_n;
     uint32_t *minmax = spirv_nan_minmax(w, words);
     if (minmax) w = minmax;
+    uint64_t sqrt_n = 0;
+    uint32_t *sqrtc = spirv_sqrt_clamp(w, words, &sqrt_n);
+    if (sqrtc) w = sqrtc, words = sqrt_n;
     uint64_t fixed_n = 0;
     uint32_t *fixed = spirv_is_mesh(w, words) ? NULL : geometry_chain ? spirv_fixup_linked(w, words, &fixed_n, 1) : spirv_fixup(w, words, &fixed_n);
     if (fixed) w = fixed, words = fixed_n;
@@ -1320,6 +1403,7 @@ static VkShaderModule make_module_linked(const uint32_t *w, uint64_t words, int 
     VkShaderModule m = VK_NULL_HANDLE;
     VkResult r = vkCreateShaderModule(P.device, &ci, NULL, &m);
     free(fixed);
+    free(sqrtc);
     free(minmax);
     free(over);
     return r == VK_SUCCESS ? m : VK_NULL_HANDLE;
