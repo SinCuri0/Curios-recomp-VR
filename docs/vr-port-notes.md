@@ -213,7 +213,47 @@ Decision: show videos on a flat screen that stays fixed in the room. Do not lock
 - The scene is 1280x720 even when the output is larger. With VR on, `resolution = auto` means 100 here, because the game's
   lowest dynamic resolution is too blurry in a headset.
 
+## HUD and menus (verified in Lichii)
+
+UI manager: `M = *(*(main+0x4c7e098))`.
+
+- Screens: count `M+0x8`, array `M+0x10`. A screen's layout is at `screen+0x28`. Its name (`char*`) is at `screen+0x178`.
+- ID to screen: the map `*(M+0x48)` is an open-address table, capacity `+0x24`, entries `{u32 id, u32 index}` at
+  `+0x18`. Start at `id % capacity`, step +1 with wrap, stop at id 0.
+- Open: `+0x1a6 == 2` and signed `+0x1a5 >= 0` (`main+0xa687f0`). Byte `+0x1a8` is not a visibility signal: most
+  screens keep it at 1.
+- Pane calls: `find_pane(layout, name)` `main+0x43e1e0`; `SetTranslate(s0 x, s1 y, x0 pane)` `main+0x20a3e0`
+  (fields `+0x6c`, `+0x70`); `SetScale(s0, s1, s2, x0 pane)` `main+0xb29b20` (`+0x60`, `+0x64`). The origin is the screen
+  centre and y is up: the top corner groups sit at y 1078.
+
+| ID | Name | Notes |
+|---|---|---|
+| `5c7f1c3c` | PlayerStatus_00 | hearts and items; corner groups `N_ScaleL_00` (-1920, 1078), `N_ScaleR_00` (1920, 1078) |
+| `3e737418` | (counters) | shop and event counters |
+| `c3332ad4` | MapMenu_00 | the minimap |
+| `2d9798a8` | DoCommand_00 | the action prompt ("Open") |
+| `b116cfbc` | ActionGuide_00 | |
+| `5528d3d9` | CtrlGuide_00 | button guide bar |
+| `2e6867e2` | Talk_00 | talk box |
+| `6b8f8fdd` | MessageDemo_00 | |
+| `c0a4dec4` | PlusMenu_00 | pause menu |
+| `f5b7168b` | MenuBG_00 | open for the pause menu and the big map |
+| `20d55c5a` | MenuOverlay_00 | |
+| `8f87396d` | MessageLog_01 | opens with `MessageDialog_00` in every talk: not a menu signal |
+
+Tests: + opened `PlusMenu_00` and `MenuBG_00`; − opened `MenuBG_00` only. Both closed again on the second press.
+
+The HUD code hooks `main+0x340a4b4` (`bl main+0x338b4c0`, the same site as the Edge-to-Edge Ultrawide HUD mod) and moves
+panes only when they are at rest, as that mod does. Code-cave use: Dark's code `0x3c46200`, Hyrule Cheat Menu
+`0x3c46280-0x3c46398`, ultrawide `0x3c46600-0x3c467c8`, Lichii's own `0x3c46e00-0x3c46f10`; the VR HUD uses
+`0x3c46900-0x3c46c20`.
+
+The recomp cutscene signal (the listener view, see "Cutscenes") does not work in Lichii: in normal running with first
+person on, that view was 3-4 m from Link's feet (the third-person camera place), so it reported 3 false cutscenes in
+one run-and-roll test.
+
+Lichii reads `global.resolution_setup` from `frizti.ini`; that file wins over `qt-config.ini`.
+
 ## Not found or not done
 
-- The HUD and the menus are not placed for VR.
 - Headset tests: one, with a PlayStation VR2 through SteamVR, before most of this work.
