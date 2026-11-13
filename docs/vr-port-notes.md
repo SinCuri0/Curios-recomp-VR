@@ -293,8 +293,17 @@ turns it (view object `+0x8` matrix, `+0x38` eye):
 - Talk open: `Talk_00` (`2e6867e2`) or `MessageDemo_00` (`6b8f8fdd`) is open (UI manager, see "HUD and menus").
 - Talk camera on: talk open and a cut in the last 60 camera updates. Off: 30 camera updates after the talk closes.
 
-Link's forward: column 3 of his 3x3 rotation at actor `+0x328` (`rot[2]`, `rot[5]`, `rot[8]`), read (seen while
-running, in the first-person eye offset).
+Link's forward: column 3 of his 3x3 rotation at actor `+0x328` (`rot[2]`, `rot[5]`, `rot[8]`), verified while running
+(Lichii log, 2026-11-13: dot with the feet movement 1.00).
+
+Talk animations turn Link's body without changing `+0x328` (verified, 2026-11-13, Goron City talk from the owner's
+save). During the talk, `+0x328` and the root bone still pointed the run direction, but Link's head bone pointed the
+other way (dot -0.97) and the shield on his back was in front of a first-person eye. Where Link's head faces: the head
+bone's second axis (world matrices at skeleton `+0x20`, bone `HeadBone`, floats 4..6), flat. While running it matched
+the run direction (dot 0.98). The view along it showed the Goron who talks (Lichii `oot_vr_test.py --talk 3`).
+
+The game camera during these talk shots is a normal view: determinant 1.00, row 3 = minus the eye-to-target direction
+(verified, same test).
 
 ## Not found or not done
 
