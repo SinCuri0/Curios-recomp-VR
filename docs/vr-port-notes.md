@@ -305,6 +305,14 @@ the run direction (dot 0.98). The view along it showed the Goron who talks (Lich
 The game camera during these talk shots is a normal view: determinant 1.00, row 3 = minus the eye-to-target direction
 (verified, same test).
 
+Near plane: the main projection object keeps near at `+0x98` and far at `+0x9C` (0.1 and 25000 in play, read from the
+Lichii log). Its 4x4 matrix at `+0xC` is row-major: `P[10] = -(f+n)/(f-n)`, `P[11] = -2fn/(f-n)`. In play `P[11]` is
+-0.2 (near 0.1 m). In the Goron talk shot `P[11]` is -2.0 (near about 1 m), which cuts off the floor below a
+first-person eye (seen in test pictures, 2026-11-13). Writing `+0x98` in the camera hook does not hold: the game sets
+it back. Lichii sets `P[10]` and `P[11]`, and `+0x98`, in the projection copy at set-view instead: 0.1 m in first person,
+0.02 m in third person (this Goron shot puts the camera almost on the floor). Verified in test pictures, 2026-11-13: the
+floor is whole. With `P` changed but `+0x98` left at 1 m, the floor showed bright patches, so a depth effect reads `+0x98`.
+
 ## Not found or not done
 
 - Headset tests: one, with a PlayStation VR2 through SteamVR, before most of this work.
