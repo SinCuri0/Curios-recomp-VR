@@ -6,8 +6,10 @@ This fork (`feat/vr-openxr`, remote `vr` = SinCuri0/Curios-recomp-VR) finds the 
 itself is moving to Lichii in `D:\Games\Emulators\lichii repo` (branch `feat/oot-vr`, notes in `docs/nx2/oot-vr.md`).
 Write every fact the VR mode uses in `docs/vr-port-notes.md`, with its status: verified, read, or not tested.
 
-Ghidra is expected in `toolchain\ghidra\` (see `docs/building.md`, "Reverse engineering"). On 2026-11-13 it is not
-installed on this PC.
+Ghidra 12.1.4 runs headless in WSL Ubuntu (`/opt/ghidra_12.1.4_PUBLIC`), not in `toolchain\ghidra\` as
+`docs/building.md` says. Project: `/home/alexander/ghidra-oot/oot.gpr` with `main.elf` at `0x7000000000`. Run a script:
+`wsl -d Ubuntu -- bash /mnt/d/Games/Emulators/recomp/tools/ghidra/analyze.sh --script <Name>.java <args>`. Keep new
+scripts in `tools/ghidra/scripts/` (tracked). Write script output to `build/ghidra/` (ignored): it comes from the game.
 
 ## Sync and commits
 
