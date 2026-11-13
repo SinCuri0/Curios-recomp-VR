@@ -3,7 +3,7 @@
 ## OoT VR
 
 This fork (`feat/vr-openxr`, remote `vr` = SinCuri0/Curios-recomp-VR) finds the game facts for the VR mod. The mod
-itself is moving to Lichii in `D:\Games\Emulators\lichii repo` (branch `feat/oot-vr`, notes in `docs/nx2/oot-vr.md`).
+itself is moving to Lichii in `D:\Games\Emulators\lichii repo` (branch `oot-vr-mod`, notes in `docs/nx2/oot-vr.md`).
 Write every fact the VR mode uses in `docs/vr-port-notes.md`, with its status: verified, read, or not tested.
 
 Ghidra 12.1.4 runs headless in WSL Ubuntu (`/opt/ghidra_12.1.4_PUBLIC`), not in `toolchain\ghidra\` as
