@@ -254,6 +254,31 @@ one run-and-roll test.
 
 Lichii reads `global.resolution_setup` from `frizti.ini`; that file wins over `qt-config.ini`.
 
+## Item menu (L/R shortcut) stops the world draw (found in Lichii, 2026-11-13)
+
+When the L/R item menu (`ShortCut_00`) opens, the game stops drawing the world (about 135 draws a frame instead of
+500-2800) and shows a captured picture (`P_CaptureBG_00`). Actors pause, and the camera's set-view (`main+0x33a240`) is
+no longer called, so a headset gets no new poses. The chain, from the draw back to the menu:
+
+1. The view job `main+0x798a0` (a job-list runner under the main task loop `main+0x5fe60`) handles each view of the
+   scene (`scene+0x138`, `0x5548` bytes each, count `scene+0x130`). It runs the camera's set-view and the setup after it
+   only when bit 0 of the u16 `view+0x54dc` is set (check at `main+0x79b10`).
+2. `main+0x3437c0(view, a, b, c)`, called just before (`main+0x79b00`), rewrites `view+0x54dc` every frame: it clears
+   bits 0-2, sets bit 1, and sets bits 0 and 3 (`| 9`) only when all hold: camera `+0x91 != 0` (camera = `view+0x5f0`),
+   `a` (scene `+0x3b18` bit 6, or 0 when the view's layer entry `*(scene+0x1b88) + view[+8]*0x278` has `+0x270 == 1`),
+   and camera `+0x884` bit 4 clear or camera `+0x228 == 0`. Gameplay value `0x0fb7`, with the menu `0x0fb2`.
+3. Of those inputs only camera `+0x91` changes with the menu (1 to 0). The camera manager update `main+0x6531c0` clears
+   `+0x91` for every camera every frame (`main+0x6532cc`, `main+0x653824`), then ORs in `1 << display.index` when the
+   camera's display is enabled: display = `*(mgr+0x18)[i]`, i = camera `+0x90` (or `+0x8f` when that is `0xff`); the gate
+   is bit 0 of the display's u32 `+0x7d0` (`main+0x653264`). Cameras are at `mgr+0x28` (count `+0x20`). The display
+   stays enabled with the menu (`+0x7d0 = 0x00050425` throughout), so that is not the switch.
+4. The other gate in that loop: the camera is updated (and `+0x91` set) only when the u16 camera `+0x88` has bits 0 and
+   1 both set. The menu clears bit 0 once when it opens (`0xa4c3` to `0xa4c2`) and sets it on close. This is the switch:
+   setting bit 0 again while the menu is shown keeps the world drawn behind the menu (verified in Lichii, frame dump).
+
+Writing `view+0x54dc` or camera `+0x91` once a frame (instead of `+0x88`) from the HUD code does not help: the game rewrites both every frame
+before the view job reads them.
+
 ## Not found or not done
 
 - Headset tests: one, with a PlayStation VR2 through SteamVR, before most of this work.

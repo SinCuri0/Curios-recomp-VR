@@ -255,6 +255,8 @@ static void widen(Cpu *c) {
     c->x[3] = (uint64_t)(uintptr_t)proj_copy;
 }
 
+static void dr_src(uint64_t addr);
+
 static void set_view(Cpu *c) {
     settings();
     const unsigned view = (unsigned)c->x[1];
@@ -264,6 +266,16 @@ static void set_view(Cpu *c) {
         if (L.total % 3000 == 1)
             rt_log("vr camera: view %u x2 %#llx x4 %#llx, x4 %s", view, (unsigned long long)c->x[2], (unsigned long long)c->x[4],
                    m2 == m4 ? "is x2" : memcmp(m2, m4, 48) ? "differs" : "holds the same matrix");
+    }
+    static long drs = -2;   // LOCAL TEST (Ocarina): OOT_VR_DRSRC=<present> watches writes to the displayed camera's own view matrix
+    if (drs == -2) { const char *e = getenv("OOT_VR_DRSRC"); drs = e ? atol(e) : -1; }
+    if (view == 0 && drs >= 0 && (long)presents >= drs && c->x[16] == 0x700033a2d8ull) {
+        drs = -1;
+        const uint64_t cam = *(const uint64_t *)(uintptr_t)(c->x[0] + 0x5f0);
+        rt_log("vr dr: renderer %#llx camera %#llx view obj %#llx proj obj %#llx x2 %#llx x3 %#llx", (unsigned long long)c->x[0],
+               (unsigned long long)cam, (unsigned long long)*(const uint64_t *)(uintptr_t)(cam + 0x78),
+               (unsigned long long)*(const uint64_t *)(uintptr_t)(cam + 0x80), (unsigned long long)c->x[2], (unsigned long long)c->x[3]);
+        dr_src(getenv("OOT_VR_DRPROJ") ? c->x[3] + 0xc : c->x[2]);
     }
     if (view == 0 && c->x[16] == LISTENER_CALLER && target) {
         const float *m = (const float *)(uintptr_t)c->x[2], *feet = (const float *)(uintptr_t)(target + 0x31c);
@@ -725,8 +737,10 @@ static void dr_step(void) {
         if (addr) CloseHandle(CreateThread(NULL, 0, dr_arm, (void *)(uintptr_t)addr, 0, NULL));
     }
 }
+static void dr_src(uint64_t addr) { CloseHandle(CreateThread(NULL, 0, dr_arm, (void *)(uintptr_t)addr, 0, NULL)); }
 #else
 static void dr_step(void) {}
+static void dr_src(uint64_t addr) { (void)addr; }
 #endif
 
 void vr_camera_live(void) {
