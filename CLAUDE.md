@@ -16,7 +16,9 @@ scripts in `tools/ghidra/scripts/` (tracked). Write script output to `build/ghid
 - At the start of a session: `git status`, then `git fetch --all --prune`, then report how far `HEAD` is from
   `origin/main` and `vr/feat/vr-openxr`.
 - Commit each working step. Do not end a session with uncommitted work; make a WIP commit if needed.
-- Ask before you push. Push target: `vr`.
+- Our repo is SinCuri0/Curios-recomp-VR (remote `vr`). `origin` (sostenesfreitas/ocarina-recomp) is read only: fetch
+  and merge from it, never push.
+- Ask before you push.
 - Merge `origin/main` with `git merge`, never rebase pushed branches.
 
 ## Builds
