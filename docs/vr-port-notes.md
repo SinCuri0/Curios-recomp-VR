@@ -279,6 +279,23 @@ no longer called, so a headset gets no new poses. The chain, from the draw back 
 Writing `view+0x54dc` or camera `+0x91` once a frame (instead of `+0x88`) from the HUD code does not help: the game rewrites both every frame
 before the view job reads them.
 
+## Talk cameras (Lichii, 2026-11-13, not tested)
+
+Problem (seen by the owner in the headset): in some talks the game camera cuts between shots. First person keeps the
+eye at Link's head but takes its direction from the game camera, so the view turns with each shot and often faces the
+wrong way.
+
+Signal used (not tested), in the camera-source hook (`main+0x4c5068`), from the game's own camera before the head pose
+turns it (view object `+0x8` matrix, `+0x38` eye):
+
+- Cut: in one camera update the eye moves more than 1 m farther than Link's feet (actor `+0x31c`), or the flat forward
+  turns more than 25 degrees.
+- Talk open: `Talk_00` (`2e6867e2`) or `MessageDemo_00` (`6b8f8fdd`) is open (UI manager, see "HUD and menus").
+- Talk camera on: talk open and a cut in the last 60 camera updates. Off: 30 camera updates after the talk closes.
+
+Link's forward: column 3 of his 3x3 rotation at actor `+0x328` (`rot[2]`, `rot[5]`, `rot[8]`), read (seen while
+running, in the first-person eye offset).
+
 ## Not found or not done
 
 - Headset tests: one, with a PlayStation VR2 through SteamVR, before most of this work.
